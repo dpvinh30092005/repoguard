@@ -1,175 +1,326 @@
 # repoguard
 
-Tool kiểm tra **code** và **issue** cho nhiều repo cùng lúc, chạy trên **GitHub** và **GitLab**.
-Repo nào "connect" (cài GitHub App / thêm webhook GitLab) là được kiểm tra tự động.
+**Automated code and issue checks for GitHub and GitLab: one service, many repositories.**
 
-| Nhóm | Tính năng | Chạy ở đâu |
+[![CI](https://github.com/dpvinh30092005/repoguard/actions/workflows/ci.yml/badge.svg)](https://github.com/dpvinh30092005/repoguard/actions/workflows/ci.yml)
+![Go](https://img.shields.io/badge/go-1.24-00ADD8?logo=go&logoColor=white)
+![Platforms](https://img.shields.io/badge/platforms-GitHub%20%7C%20GitLab-555)
+
+Connect a repository and repoguard reviews every pull/merge request and every new issue.
+It enforces team conventions, catches leaked secrets, gives AI review comments, runs your
+builds, tests, Postman collections and SonarQube analysis, and keeps the issue tracker tidy.
+Results come back where developers already look: commit statuses, one sticky summary
+comment and inline review comments.
+
+---
+
+## Contents
+
+- [Features](#features)
+- [How it works](#how-it-works)
+- [Quick start](#quick-start)
+- [Connecting repositories](#connecting-repositories)
+- [Configuration](#configuration)
+- [Integrations: Postman, SonarQube, Jenkins](#integrations-postman-sonarqube-jenkins)
+- [Executor: CI for projects without pipelines](#executor-ci-for-projects-without-pipelines)
+- [Operations](#operations)
+- [Security model](#security-model)
+- [Project layout](#project-layout)
+- [Development](#development)
+- [Roadmap](#roadmap)
+
+## Features
+
+| Area | What repoguard does | Runs in |
 |---|---|---|
-| Quy tắc PR/MR | title theo convention, có mô tả, có link issue, cảnh báo PR quá lớn | Service |
-| Secret | phát hiện AWS/GitHub/GitLab/Slack/Stripe/Anthropic key, private key, password entropy cao trong dòng **được thêm** | Service (+ cả repo trong CI) |
-| AI review | Claude đọc diff, comment inline theo mức critical/major/minor/nit | Service |
-| Lint + build + test | tự nhận Go / Node / Python, **nhiều project trong một repo** | CI của repo |
-| Dependency CVE | `osv-scanner` (mọi ecosystem, OSV database) | CI của repo |
-| Issue | thiếu thông tin → hỏi lại + label `needs-info`; tự gắn label; phát hiện trùng lặp | Service |
-| Issue lifecycle | stale → nhắc → đóng; cảnh báo SLA cho bug P0 chưa ai nhận | Service (sweep định kỳ) |
-| Issue ↔ PR | PR phải link issue; comment lên issue khi có PR; merge xong tự đóng issue | Service |
-| **Postman / SonarQube / Jenkins** | Chạy Postman collection bằng Newman, quét SonarQube + Quality Gate, hoặc build qua Jenkins; có bộ docker-compose dựng sẵn | CI / executor → [docs/integrations.md](docs/integrations.md) |
-| **Executor** (tuỳ chọn) | repo **không có/không được chạy CI** (GitLab tắt pipeline): service tự build MR trong container cách ly | Service + Docker → [docs/executor.md](docs/executor.md) |
+| **PR/MR rules** | Conventional-commit titles, a real description, a linked issue, warnings for oversized changes | Service |
+| **Secret scanning** | AWS, GitHub, GitLab, Slack, Stripe and Anthropic keys, private keys, high-entropy passwords in *added* lines; values are always masked | Service + CI |
+| **AI review** | Claude reads the diff and leaves ranked inline comments (critical → nit). Advisory by default | Service |
+| **Build & test** | Detects Go, Node.js and Python projects (many per repository) and runs install → lint → build → test | Your CI / executor |
+| **Dependency CVEs** | `osv-scanner` across every ecosystem | Your CI / executor |
+| **API tests** | Runs Postman collections with Newman, optionally starting the API first | Your CI / executor |
+| **Code quality** | Runs `sonar-scanner` and reports the SonarQube Quality Gate and key metrics | Your CI / executor |
+| **Issue triage** | Asks reporters for missing details, auto-labels, flags likely duplicates | Service |
+| **Issue lifecycle** | Marks and closes stale issues; flags high-priority issues nobody picked up | Service (periodic sweep) |
+| **Issue ↔ PR links** | Requires a linked issue, notes the PR on the issue, closes it on merge | Service |
+| **Executor** | Builds merge requests itself, in a sandbox or on Jenkins, when a project has no working CI | Service + Docker/Jenkins |
 
-## Kiến trúc
+## How it works
 
 ```mermaid
 flowchart LR
     subgraph Platforms
-      GH[GitHub<br/>App webhook]
-      GL[GitLab<br/>project/group webhook]
+      GH[GitHub]
+      GL[GitLab]
     end
-    GH -- signed event --> S
-    GL -- token event --> S
+    GH -- signed webhook --> W
+    GL -- token webhook --> W
     subgraph S[repoguard serve]
       W[Webhook<br/>verify + normalize] --> Q[(Job queue<br/>dedupe · retry)]
       Q --> E[Engine]
-      E --> C1[pr-rules]
-      E --> C2[secrets]
-      E --> C3[ai-review]
-      E --> T[issue triage]
+      E --> C[Checks<br/>rules · secrets · AI]
+      E --> T[Issue triage]
       SW[Sweeper<br/>stale · SLA] --> Q
+      E --> X[Executor]
     end
-    C3 -. diff .-> AI[Claude API]
-    E -- status · comment · label --> GH & GL
-    subgraph CI[Runner CI của từng repo]
-      R[repoguard ci<br/>lint · build · test · secrets · CVE]
+    C -. diff .-> AI[Claude API]
+    X -- sandbox --> D[Docker]
+    X -- trigger --> J[Jenkins]
+    E -- statuses · comments · labels --> GH & GL
+    subgraph CI[Each repository's own CI]
+      R[repoguard ci<br/>build · test · Postman · Sonar · CVEs]
     end
     GH & GL -- pipeline --> R
-    R -- job status + JUnit --> GH & GL
 ```
 
-**Vì sao chia làm hai nửa (hybrid)?**
+repoguard is deliberately split in two:
 
-- **Service** chỉ đọc metadata và diff qua API, **không bao giờ chạy code của repo**. Nhờ vậy service
-  đa tenant mà an toàn: một PR độc hại không thể chiếm server dùng chung cho mọi repo.
-- **Build/test/quét dependency** chạy code của repo, nên chạy trên **runner của chính repo đó**
-  (GitHub Actions / GitLab CI). Repo tự trả tài nguyên, có sẵn toolchain và secret của nó.
-- Cả hai dùng chung một binary và chung file policy `.repoguard.yml`.
+- **`repoguard serve`** is a multi-tenant service. It reads metadata and diffs through the
+  platform APIs and **never executes repository code**, so one malicious pull request can't
+  take over a server that every repository shares.
+- **`repoguard ci`** runs the work that *does* execute code: builds, tests, Postman, Sonar
+  and dependency scans. It runs on each repository's own runners (GitHub Actions, GitLab CI,
+  Jenkins), or in the opt-in [executor](#executor-ci-for-projects-without-pipelines) when a
+  project has no CI.
 
-Các quyết định thiết kế khác:
+Both halves share one binary and one policy file, `.repoguard.yml`.
 
-| Quyết định | Lý do |
-|---|---|
-| Lớp `platform.Client` trung lập | Check/triage không biết GitHub hay GitLab. Thêm Bitbucket/Gitea = viết 1 client + 1 webhook parser |
-| Policy đọc từ **default branch** | Nếu đọc từ nhánh PR, PR có thể tự tắt check của chính nó |
-| Webhook trả `202` ngay, xử lý trong queue | GitHub chỉ đợi 10s; queue có dedupe (redelivery), retry backoff cho 429/5xx, chặn panic |
-| Event chỉ là "gợi ý", luôn đọc lại state qua API | Payload có thể cũ hoặc đến sai thứ tự |
-| Sticky comment (marker ẩn) + fingerprint cho inline comment | Push nhiều lần cũng không spam; finding cũ không bị đăng lại |
-| Ghi idempotent trước, inline review (không idempotent) sau cùng | Retry sau lỗi giữa chừng không đăng trùng |
-| AI review mặc định **chỉ góp ý**, không chặn merge | False positive của LLM không được làm kẹt team; bật `fail_on_critical` nếu muốn |
-| AI chỉ chạy khi có commit mới, không chạy khi sửa title | Tiết kiệm chi phí; prompt tĩnh được cache |
-| Không lưu state (stateless) | Scale ngang dễ; mất job khi restart thì event sau / sweep sau bù lại |
-| Không dùng SDK GitHub/GitLab | Chỉ cần ~15 endpoint; client mỏng, dễ test bằng fake server, ít dependency |
+## Quick start
 
-## Cấu trúc
+**Requirements:** Go 1.24+ to build from source, or Docker.
 
-```
-cmd/repoguard/            serve | ci | sweep | version
-internal/
-  platform/               model trung lập + interface Client + REST helper
-    github/               GitHub App auth (JWT → installation token), client, webhook HMAC
-    gitlab/               client, webhook token, Note/Issue/MR hooks
-  engine/                 event → check/triage → status/comment/label
-  checks/                 pr-rules, secrets, aireview (Claude)
-  triage/                 phân loại issue, section thiếu, trùng lặp TF-IDF, stale, SLA, issue refs
-  ci/                     `repoguard ci`: detect project, chạy stage, quét secret/CVE, report MD + JUnit + JSON
-  executor/               chạy `repoguard ci` trong sandbox Docker cho repo không có CI
-  queue/ server/ config/ diff/ glob/ metrics/
-.github/workflows/
-  repoguard-ci.yml        reusable workflow cho repo khác gọi
-  ci.yml                  CI của chính repoguard (test, govulncheck, tự kiểm tra, build image)
-ci-templates/             file mẫu để repo khác dùng (GitHub + GitLab)
-deploy/                   Dockerfile service / CI runner / executor, docker-compose, .env.example
-.repoguard.example.yml    toàn bộ cấu hình, có chú thích
-```
-
-## Bắt đầu nhanh
+### Check a repository locally
 
 ```bash
-make test                       # unit + end-to-end test (fake GitHub API)
+git clone https://github.com/dpvinh30092005/repoguard && cd repoguard
 make build
-./bin/repoguard ci --dir ../some-repo   # chạy phần CI trên một repo bất kỳ ở máy local
+./bin/repoguard ci --dir /path/to/your/repo
 ```
 
-Chạy service ở local, nhận webhook thật qua tunnel:
+This prints a Markdown report and writes `repoguard-report.md` and `repoguard-junit.xml`.
+Add `--json report.json` for machine-readable output, `--base origin/main` to check only the
+projects a branch changed, and `--no-vuln` to skip the dependency scan.
+
+### Run the service
 
 ```bash
-cp deploy/.env.example deploy/.env      # điền secret
-make run                                # :8080
-npx smee-client -u https://smee.io/<kênh> -t http://localhost:8080/webhooks/github
+cp deploy/.env.example deploy/.env      # fill in tokens and webhook secrets
+docker compose -f deploy/docker-compose.yml up -d
 ```
 
-Deploy: `docker compose -f deploy/docker-compose.yml up -d` (đặt sau TLS), hoặc chạy image
-`ghcr.io/<owner>/repoguard` trên Kubernetes/Cloud Run/ECS với probe `/healthz`, `/readyz`.
+The service listens on `:8080`. Put it behind TLS and point webhooks at
+`/webhooks/github` or `/webhooks/gitlab`. To receive webhooks on a laptop, forward them with a
+tunnel such as [smee.io](https://smee.io) or `cloudflared`.
 
-## Kết nối một repo
+### Try everything at once
 
-| | GitHub | GitLab |
+[`deploy/stack`](deploy/stack) starts repoguard, **SonarQube** and a pre-configured **Jenkins**
+with one command:
+
+```bash
+cp deploy/stack/.env.example deploy/stack/.env
+docker compose -f deploy/stack/docker-compose.yml up -d --build
+deploy/stack/init-sonar.sh        # once: prints a SonarQube token for .env
+```
+
+| Service | URL |
+|---|---|
+| repoguard | http://localhost:8080 |
+| Jenkins | http://localhost:8081 |
+| SonarQube | http://localhost:9000 |
+
+## Connecting repositories
+
+| Step | GitHub | GitLab |
 |---|---|---|
-| 1. Service | Tạo GitHub App một lần → [docs/setup-github.md](docs/setup-github.md) | Tạo bot token + webhook → [docs/setup-gitlab.md](docs/setup-gitlab.md) |
-| 2. Mỗi repo | Cài App vào repo/org | Thêm webhook ở project hoặc **group** (áp dụng cho mọi project con) |
-| 3. CI (tùy chọn) | Copy [`ci-templates/github/repoguard.yml`](ci-templates/github/repoguard.yml) | `include:` [`ci-templates/gitlab/repoguard.gitlab-ci.yml`](ci-templates/gitlab/repoguard.gitlab-ci.yml) |
-| 4. Policy (tùy chọn) | `.repoguard.yml` trên default branch, xem [`.repoguard.example.yml`](.repoguard.example.yml) | như GitHub |
-| 5. Bắt buộc check | Branch protection: require `repoguard/pr-rules`, `repoguard/secrets`, `repoguard / repoguard ci` | Settings → Merge requests → *Pipelines must succeed* |
+| 1. Service access | Create a GitHub App ([guide](docs/setup-github.md)) | Create a bot or group access token with `api` scope ([guide](docs/setup-gitlab.md)) |
+| 2. Per repository | Install the App on the repository or organization | Add a project or **group** webhook (groups cover every sub-project) |
+| 3. CI half (optional) | Copy [`ci-templates/github/repoguard.yml`](ci-templates/github/repoguard.yml) | `include:` [`ci-templates/gitlab/repoguard.gitlab-ci.yml`](ci-templates/gitlab/repoguard.gitlab-ci.yml) |
+| 4. Policy (optional) | Commit `.repoguard.yml` to the default branch | Same |
+| 5. Enforce | Require `repoguard/pr-rules`, `repoguard/secrets` and the CI job in branch protection | *Pipelines must succeed* |
 
-Kết quả xuất hiện trên PR/MR dưới dạng:
-- **commit status** `repoguard/pr-rules`, `repoguard/secrets`, `repoguard/ai-review`
-- **một comment tóm tắt** được cập nhật tại chỗ mỗi lần push
-- **comment inline** cho secret và góp ý của AI
-- pipeline `repoguard ci` với bảng lint/build/test theo từng project (job summary trên GitHub, widget JUnit trên GitLab)
+GitHub repositories reuse the CI half as a reusable workflow (the `v1` tag is not published
+yet; until it is, pin a commit SHA instead):
 
-## Cấu hình service (biến môi trường)
+```yaml
+# .github/workflows/repoguard.yml
+on: [pull_request]
+jobs:
+  repoguard:
+    uses: dpvinh30092005/repoguard/.github/workflows/repoguard-ci.yml@v1
+```
 
-| Biến | Mặc định | Ý nghĩa |
+> The detailed guides in [`docs/`](docs) are currently written in Vietnamese.
+
+## Configuration
+
+### Repository policy: `.repoguard.yml`
+
+Every key is optional; a repository only states what differs from the defaults. The file is
+read from the **default branch**, so a pull request cannot weaken its own checks. Unknown keys
+are rejected, so typos fail loudly instead of being ignored.
+
+```yaml
+pull_request:
+  title_pattern: '^(feat|fix|docs|refactor|test|chore)(\(.+\))?: .{3,}'
+  require_linked_issue: true
+  max_changed_lines: 600          # warning only
+
+ai_review:
+  fail_on_critical: false         # AI comments are advisory unless you opt in
+  instructions: |
+    Flag raw SQL string building; we use parameterized queries.
+
+issues:
+  stale: { days_until_stale: 60, days_until_close: 14 }
+
+ci:
+  postman:
+    start: npm --prefix api start
+    wait_url: http://127.0.0.1:3000/health
+  sonar:
+    fail_on_gate: true
+```
+
+See [`.repoguard.example.yml`](.repoguard.example.yml) for every option with its default.
+
+### Service environment
+
+| Variable | Default | Purpose |
 |---|---|---|
-| `REPOGUARD_ADDR` | `:8080` | địa chỉ lắng nghe |
-| `REPOGUARD_WORKERS` / `REPOGUARD_QUEUE_SIZE` | `8` / `1000` | số worker và sức chứa queue |
-| `REPOGUARD_SWEEP_INTERVAL` | `6h` | chu kỳ sweep stale/SLA (`0` = tắt, dùng `repoguard sweep` qua cron) |
-| `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY(_FILE)` | | GitHub App (khuyến nghị) |
-| `GITHUB_TOKEN` | | thay cho App: PAT của tài khoản bot |
-| `GITHUB_WEBHOOK_SECRET` | | bắt buộc nếu bật GitHub |
-| `GITHUB_API_URL` | `https://api.github.com` | GitHub Enterprise: `https://ghe.example.com/api/v3` |
-| `GITLAB_URL`, `GITLAB_TOKEN`, `GITLAB_WEBHOOK_SECRET` | `https://gitlab.com` | GitLab.com hoặc self-managed |
-| `ANTHROPIC_API_KEY` | | bật AI review |
-| `REPOGUARD_AI_MODEL` / `REPOGUARD_AI_EFFORT` | `claude-opus-5-5` / `high` | model và mức effort |
+| `REPOGUARD_ADDR` | `:8080` | Listen address |
+| `REPOGUARD_WORKERS` / `REPOGUARD_QUEUE_SIZE` | `8` / `1000` | Worker pool and queue capacity |
+| `REPOGUARD_SWEEP_INTERVAL` | `6h` | Stale/SLA sweep interval (`0` disables; use `repoguard sweep` from cron) |
+| `REPOGUARD_PUBLIC_URL` | – | Link shown on commit statuses |
+| `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY` or `_FILE` | – | GitHub App credentials (recommended) |
+| `GITHUB_TOKEN` | – | Alternative to an App: a bot token |
+| `GITHUB_WEBHOOK_SECRET` | – | Required to accept GitHub webhooks |
+| `GITHUB_API_URL` | `https://api.github.com` | GitHub Enterprise Server: `https://ghe.example.com/api/v3` |
+| `GITLAB_URL`, `GITLAB_TOKEN`, `GITLAB_WEBHOOK_SECRET` | `https://gitlab.com` | GitLab.com or self-managed |
+| `ANTHROPIC_API_KEY` | – | Enables AI review |
+| `REPOGUARD_AI_MODEL` / `REPOGUARD_AI_EFFORT` | `claude-opus-5-5` / `high` | Review model and effort |
 
-AI review gửi kèm `fallbacks: "default"` (server-side fallback, beta `server-side-fallback-2026-07-01`):
-nếu bộ phân loại an toàn từ chối một diff, API tự chạy lại request đó trên model dự phòng
-thay vì trả lỗi. Bỏ tùy chọn này trong `internal/checks/aireview/claude.go` nếu không muốn dùng.
+Executor, Jenkins and SonarQube variables are listed in [their section](#executor-ci-for-projects-without-pipelines).
 
-## Vận hành
+## Integrations: Postman, SonarQube, Jenkins
 
-- **Metrics** (`/metrics`, định dạng Prometheus): `repoguard_webhooks_total{platform,result}`,
-  `repoguard_events_total{type,result}`, `repoguard_checks_total{check,state}`, `repoguard_jobs_total{result}`,
-  `repoguard_queue_depth`.
-- Gợi ý alert: `result="unauthorized"` tăng (sai secret hoặc bị dò), `jobs_total{result="failed"}` tăng,
-  `queue_depth` cao kéo dài.
-- Log JSON có `repo`, `event`, `number`, `delivery` để tra theo delivery ID của GitHub/GitLab.
-- Queue đầy → webhook trả `503 + Retry-After`, platform sẽ gửi lại thay vì mất event.
+repoguard orchestrates these tools through their official CLIs and APIs. It does not embed
+their code, and it puts their results next to everything else on the pull request.
 
-## Bảo mật
+| Tool | How it is used | Enable with |
+|---|---|---|
+| **Postman** | Every `*.postman_collection.json` runs with [Newman](https://github.com/postmanlabs/newman). repoguard can start the API, wait for a health URL, then stop it | Commit a collection; optional `ci.postman` |
+| **SonarQube** | `sonar-scanner` analyses the code; repoguard reads the Quality Gate, bugs, vulnerabilities, coverage and duplication | `SONAR_HOST_URL` + `SONAR_TOKEN` in the build environment |
+| **Jenkins** | Alternative build backend: repoguard triggers a parameterized job, waits, and reads the report artifact back | `REPOGUARD_EXECUTOR=jenkins` |
 
-- Webhook được xác thực: HMAC-SHA256 (GitHub), token so sánh constant-time (GitLab).
-- GitHub App dùng token theo installation, sống 1 giờ, cache và tự làm mới. Quyền tối thiểu: xem docs.
-- Secret bị phát hiện **không bao giờ in nguyên văn** (chỉ hiện 4 ký tự đầu), vì comment là công khai.
-- Nội dung PR đưa cho AI được đánh dấu là dữ liệu không tin cậy (chống prompt injection);
-  hướng dẫn riêng của team chỉ lấy từ `.repoguard.yml` trên default branch.
-- Service không clone, không chạy code của repo, **trừ khi** bật executor cho các repo được liệt kê;
-  khi đó code chạy trong container dùng một lần, có giới hạn, không có credential (xem [docs/executor.md](docs/executor.md)).
+Details: [docs/integrations.md](docs/integrations.md). The demo stack and a real Jenkins +
+SonarQube run are exercised in CI on every push.
 
-## Giới hạn hiện tại & lộ trình
+## Executor: CI for projects without pipelines
 
-- Queue nằm trong bộ nhớ → chỉ chạy **1 replica**. Muốn HA: chuyển `queue` sang Redis/NATS/SQS
-  (giữ nguyên interface) và chạy nhiều replica sau load balancer.
-- Phát hiện trùng lặp dùng TF-IDF (không cần dịch vụ ngoài). Nếu recall chưa đủ, đổi sang embedding
-  mà vẫn giữ signature của `triage.FindDuplicates`.
-- Kết quả `repoguard ci` hiển thị qua status của pipeline, chưa gộp vào comment tóm tắt của service.
-  Bước tiếp theo: CI gửi report JSON lên `POST /api/reports` (xác thực bằng OIDC token của CI).
-- Bổ sung sau: Bitbucket/Gitea, dashboard nhiều repo, cấu hình mặc định cấp org (`.github` repo / group),
-  rule secret tùy biến, SARIF upload lên GitHub code scanning.
+When a project's own CI is unavailable (for example, GitLab pipelines are disabled), repoguard
+can build merge requests itself and post a **🧪 repoguard ci** comment with per-project results.
+
+It is opt-in and fenced:
+
+- Nothing is built unless the repository matches `REPOGUARD_EXECUTOR_REPOS`.
+- Only authors with Developer/write access are built; **forks never are**.
+- The policy comes from the default branch, never from the merge request.
+- Credentials stay out of the build: the token is used for `git fetch` on the host only.
+- Each build runs in a fresh container with all capabilities dropped and limits on CPU,
+  memory, process count and time. gVisor is optional.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `REPOGUARD_EXECUTOR` | auto | `docker`, `jenkins` or `off`. Auto uses Docker when it is available |
+| `REPOGUARD_EXECUTOR_REPOS` | – | Comma-separated repository globs allowed to build, e.g. `team/*` |
+| `REPOGUARD_EXECUTOR_IMAGE` | `ghcr.io/dpvinh30092005/repoguard-ci:1` | Build image (Go, Node, Python, Newman, sonar-scanner, osv-scanner) |
+| `REPOGUARD_EXECUTOR_CPUS` / `_MEMORY` / `_PIDS_LIMIT` | `2` / `4g` / `1024` | Per-build limits |
+| `REPOGUARD_EXECUTOR_TIMEOUT` / `_CONCURRENCY` | `20m` / `2` | Wall clock per build, parallel builds |
+| `REPOGUARD_EXECUTOR_NETWORK` / `_RUNTIME` | `bridge` / – | Container network (`none` for offline builds), e.g. `runsc` |
+| `JENKINS_URL`, `JENKINS_USER`, `JENKINS_TOKEN`, `JENKINS_JOB` | job `repoguard-ci` | Jenkins backend ([Jenkinsfile](ci-templates/jenkins/Jenkinsfile)) |
+| `SONAR_HOST_URL`, `SONAR_TOKEN` | – | Passed into sandboxed builds by name only |
+
+To build the image locally instead of pulling it, run
+`docker build -f deploy/ci-runner.Dockerfile -t repoguard-ci:local .` and set
+`REPOGUARD_EXECUTOR_IMAGE=repoguard-ci:local`. Full guide: [docs/executor.md](docs/executor.md).
+
+## Operations
+
+- **Probes:** `GET /healthz` (liveness) and `GET /readyz` (fails while the queue is over 90% full).
+- **Metrics:** `GET /metrics` in Prometheus text format: `repoguard_webhooks_total`,
+  `repoguard_events_total`, `repoguard_checks_total`, `repoguard_jobs_total`,
+  `repoguard_executor_runs_total`, `repoguard_queue_depth`.
+- **Logs:** structured JSON with `repo`, `event`, `number` and `delivery` fields. Search by the
+  platform's delivery ID.
+- **Back-pressure:** with a full queue, webhooks get `503` with `Retry-After`, so the platform
+  redelivers instead of the event being dropped.
+- **Alert on:** a rise in `result="unauthorized"` webhooks, failed jobs, or a sustained high queue depth.
+
+## Security model
+
+- Webhooks are authenticated: HMAC-SHA256 on GitHub, constant-time token comparison on GitLab.
+- GitHub App installation tokens are short-lived, cached, and refreshed automatically.
+- Detected secrets are never echoed; reports show only the first four characters.
+- Pull request content sent to the model is marked as untrusted data, which guards against
+  prompt injection. Team instructions come only from the default-branch policy.
+- The service never runs repository code; the executor is opt-in and sandboxed (see above).
+- Idempotent writes and content fingerprints make sure retries and repeated pushes never
+  post duplicate comments.
+
+## Project layout
+
+```
+cmd/repoguard/          CLI: serve | ci | sweep | version
+internal/
+  platform/             provider-neutral model and client interface
+    github/ gitlab/     API clients and webhook parsers
+  engine/               events → checks/triage → statuses, comments, labels
+  checks/               pr-rules, secrets, aireview (Claude)
+  triage/               issue assessment, duplicates (TF-IDF), stale, SLA, issue references
+  ci/                   `repoguard ci`: project detection, stages, Postman, Sonar, reports
+  executor/             sandboxed and Jenkins builds for repositories without CI
+  queue/ server/ config/ diff/ glob/ metrics/
+ci-templates/           drop-in CI for GitHub, GitLab and Jenkins
+deploy/                 Dockerfiles, compose files, demo stack (SonarQube + Jenkins)
+docs/                   setup guides
+```
+
+## Development
+
+```bash
+make test        # unit tests with the race detector
+make lint        # gofmt + go vet
+make build       # bin/repoguard
+make ci          # run `repoguard ci` on this repository
+```
+
+Integration tests talk to real infrastructure and are behind a build tag:
+
+```bash
+docker build -f deploy/ci-runner.Dockerfile -t repoguard-ci:test .
+REPOGUARD_TEST_IMAGE=repoguard-ci:test go test -tags integration -run Docker ./internal/executor/
+```
+
+GitHub Actions runs all of this on every push: unit tests, `govulncheck`, the Docker
+sandbox, a real SonarQube analysis, and a real Jenkins build of
+[monorepo-ci](https://github.com/dpvinh30092005/monorepo-ci) through the executor.
+
+## Roadmap
+
+- **Web admin UI** *(in progress)*: connect GitLab/GitHub, choose repositories and switch
+  on the executor from the browser, with a polling mode that needs no public URL.
+- **High availability:** the job queue is in-memory, so run one replica for now. Moving it to
+  Redis/NATS/SQS behind the same interface enables multiple replicas.
+- **CI results in the summary comment:** have `repoguard ci` report back to the service with
+  CI OIDC tokens.
+- Bitbucket and Gitea support, organization-wide default policies, SARIF upload to GitHub
+  code scanning, embedding-based duplicate detection.
+
+## Contributing
+
+Issues and pull requests are welcome. Please run `make lint test` before opening a pull
+request; repoguard checks its own pull requests too.
+
+This repository does not include a license yet. Until one is added, all rights are reserved
+by the author.
