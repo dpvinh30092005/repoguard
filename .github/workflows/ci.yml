@@ -46,7 +46,15 @@ jobs:
       - name: Run sandbox integration tests
         env:
           REPOGUARD_TEST_IMAGE: repoguard-ci:test
-        run: go test -tags integration -run Docker -v ./internal/executor/
+        run: |
+          set -o pipefail
+          go test -tags integration -run Docker -v ./internal/executor/ 2>&1 | tee integration.log
+      - name: Surface test output as an annotation
+        if: failure()
+        run: |
+          # Annotations are readable through the checks API even where raw logs are not.
+          msg=$(tail -c 50000 integration.log | sed -e 's/%/%25/g' -e 's/\r/%0D/g' | awk '{printf "%s%%0A", $0}')
+          echo "::error title=integration test output::${msg}"
 
   # Dogfooding: repoguard checks itself with the same reusable workflow consumers use.
   self-check:

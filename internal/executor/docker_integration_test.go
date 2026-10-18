@@ -54,7 +54,8 @@ func runIn(t *testing.T, d Docker, dir string) (Result, ci.Report) {
 }
 
 func TestDockerSandboxPassingProject(t *testing.T) {
-	res, report := runIn(t, dockerSandbox(t, 10*time.Minute), goProject(t, "\tif Sum(2, 2) != 4 { t.Fatal(\"bad\") }"))
+	// The fixture must be gofmt-clean: the sandbox runs the lint stage too.
+	res, report := runIn(t, dockerSandbox(t, 10*time.Minute), goProject(t, "\tif Sum(2, 2) != 4 {\n\t\tt.Fatal(\"bad\")\n\t}"))
 	if res.TimedOut || res.Report == nil {
 		t.Fatalf("no report (exit %d, timed out %v):\n%s", res.ExitCode, res.TimedOut, res.Logs)
 	}
