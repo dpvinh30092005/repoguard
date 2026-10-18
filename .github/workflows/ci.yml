@@ -79,7 +79,7 @@ jobs:
       - name: Initialise SonarQube
         id: sonar
         run: |
-          token=$(deploy/stack/init-sonar.sh http://localhost:9000)
+          token=$(deploy/stack/init-sonar.sh http://localhost:9000 2> >(tee /tmp/init-sonar.log >&2))
           echo "::add-mask::$token"
           echo "token=$token" >> "$GITHUB_OUTPUT"
       - name: sonar-scanner analyses a sample project
@@ -131,6 +131,7 @@ jobs:
           note() { msg=$(tail -c 30000 "$2" 2>/dev/null | sed -e 's/%/%25/g' -e 's/\r/%0D/g' | awk '{printf "%s%%0A", $0}'); echo "::error title=$1::${msg}"; }
           $COMPOSE logs --no-color --tail 150 jenkins > /tmp/jenkins-container.log 2>&1 || true
           $COMPOSE logs --no-color --tail 80 sonarqube > /tmp/sonar-container.log 2>&1 || true
+          note "init-sonar" /tmp/init-sonar.log
           note "sonar step" /tmp/sonar.log
           note "jenkins test" /tmp/jenkins.log
           note "jenkins container" /tmp/jenkins-container.log
