@@ -32,6 +32,17 @@ var templateFS embed.FS
 
 const cookieName = "repoguard_session"
 
+// ExecutorInfo describes where CI builds would run right now.
+type ExecutorInfo struct {
+	Available    bool
+	Backend      string // "docker" | "jenkins"
+	Reason       string // why it is not available
+	Image        string // docker: build image
+	ImagePresent bool
+	Detail       string // jenkins: URL and job
+	Sonar        bool   // builds will analyse with SonarQube
+}
+
 // Status of one platform connection, shown on the overview.
 type Status struct {
 	Configured bool
@@ -55,9 +66,7 @@ type UI struct {
 	AIEnabled  func() bool
 	Locked     map[string]bool // settings fixed by environment variables
 
-	ExecutorAvailable bool
-	ExecutorReason    string
-	ExecutorImage     func(ctx context.Context) (name string, present bool)
+	Executor func(ctx context.Context) ExecutorInfo
 
 	mu     sync.RWMutex
 	status map[platform.Kind]Status
@@ -67,7 +76,13 @@ type UI struct {
 // Init parses templates and checks the configured connections once.
 func (u *UI) Init(ctx context.Context) error {
 	funcs := template.FuncMap{
-		"ago":   ago,
+		"ago": ago,
+		"eventLabel": func(ev string) string {
+			if l, ok := eventLabels[ev]; ok {
+				return l
+			}
+			return ev
+		},
 		"lower": strings.ToLower,
 		"title": func(s string) string {
 			if s == "" {
@@ -168,7 +183,7 @@ func (u *UI) loginPage(w http.ResponseWriter, r *http.Request) {
 func (u *UI) login(w http.ResponseWriter, r *http.Request) {
 	if subtle.ConstantTimeCompare([]byte(r.FormValue("password")), []byte(u.Password())) != 1 {
 		time.Sleep(500 * time.Millisecond) // slow down guessing
-		u.render(w, r, "login", map[string]any{"Error": "Sai mật khẩu."})
+		u.render(w, r, "login", map[string]any{"Error": "Wrong password."})
 		return
 	}
 	expiry := time.Now().Add(7 * 24 * time.Hour).Unix()
@@ -200,10 +215,7 @@ func (u *UI) statuses() map[platform.Kind]Status {
 
 func (u *UI) overview(w http.ResponseWriter, r *http.Request) {
 	st := u.statuses()
-	image, present := "", false
-	if u.ExecutorAvailable {
-		image, present = u.ExecutorImage(r.Context())
-	}
+	ex := u.Executor(r.Context())
 	repos := u.Store.Repos()
 	executorRepos := 0
 	for _, rp := range repos {
@@ -213,20 +225,17 @@ func (u *UI) overview(w http.ResponseWriter, r *http.Request) {
 	}
 	connected := st[platform.GitLab].User != "" || st[platform.GitHub].User != ""
 	u.render(w, r, "overview", map[string]any{
-		"Status":            st,
-		"GitLab":            st[platform.GitLab],
-		"GitHub":            st[platform.GitHub],
-		"AI":                u.AIEnabled(),
-		"Connected":         connected,
-		"Repos":             repos,
-		"ExecutorRepos":     executorRepos,
-		"ExecutorAvailable": u.ExecutorAvailable,
-		"ExecutorReason":    u.ExecutorReason,
-		"Image":             image,
-		"ImagePresent":      present,
-		"Queue":             u.QueueDepth(),
-		"Activity":          u.Activity.List(),
-		"Refresh":           true,
+		"Status":        st,
+		"GitLab":        st[platform.GitLab],
+		"GitHub":        st[platform.GitHub],
+		"AI":            u.AIEnabled(),
+		"Connected":     connected,
+		"Repos":         repos,
+		"ExecutorRepos": executorRepos,
+		"Ex":            ex,
+		"Queue":         u.QueueDepth(),
+		"Activity":      u.Activity.List(),
+		"Refresh":       true,
 	})
 }
 
@@ -241,6 +250,7 @@ func (u *UI) connectPage(w http.ResponseWriter, r *http.Request) {
 		"PublicURL": u.PublicURL(),
 		"AI":        u.AIEnabled(),
 		"Secret":    s.WebhookSecret,
+		"Ex":        u.Executor(r.Context()),
 	})
 }
 
@@ -271,13 +281,29 @@ func (u *UI) saveConnect(w http.ResponseWriter, r *http.Request) {
 			if r.FormValue("clear") == "1" {
 				s.AnthropicKey = ""
 			}
+		case "build":
+			s.BuildBackend = form("build_backend")
+			s.ExecutorImage = form("executor_image")
+			s.JenkinsURL = strings.TrimRight(form("jenkins_url"), "/")
+			s.JenkinsUser = form("jenkins_user")
+			s.JenkinsJob = form("jenkins_job")
+			if t := form("jenkins_token"); t != "" {
+				s.JenkinsToken = t
+			}
+		case "sonar":
+			s.SonarURL = strings.TrimRight(form("sonar_url"), "/")
+			if t := form("sonar_token"); t != "" {
+				s.SonarToken = t
+			}
+			if r.FormValue("clear") == "1" {
+				s.SonarURL, s.SonarToken = "", ""
+			}
 		case "advanced":
 			s.PublicURL = strings.TrimRight(form("public_url"), "/")
-			s.ExecutorImage = form("executor_image")
 		}
 	})
 	if err != nil {
-		redirect(w, r, "/connect", "", "Không lưu được: "+err.Error())
+		redirect(w, r, "/connect", "", "Could not save: "+err.Error())
 		return
 	}
 	u.refresh(r.Context())
@@ -287,14 +313,14 @@ func (u *UI) saveConnect(w http.ResponseWriter, r *http.Request) {
 		kind := platform.Kind(r.FormValue("section"))
 		switch s := st[kind]; {
 		case s.User != "":
-			redirect(w, r, "/repos", fmt.Sprintf("Đã kết nối %s với tài khoản @%s. Giờ hãy chọn dự án muốn kiểm tra.", title(kind), s.User), "")
+			redirect(w, r, "/repos", fmt.Sprintf("Connected to %s as @%s. Now pick the projects to check.", title(kind), s.User), "")
 		case s.Err != "":
-			redirect(w, r, "/connect", "", fmt.Sprintf("Chưa kết nối được %s: %s", title(kind), s.Err))
+			redirect(w, r, "/connect", "", fmt.Sprintf("Could not connect to %s: %s", title(kind), s.Err))
 		default:
-			redirect(w, r, "/connect", "Đã xoá kết nối.", "")
+			redirect(w, r, "/connect", "Connection removed.", "")
 		}
 	default:
-		redirect(w, r, "/connect", "Đã lưu.", "")
+		redirect(w, r, "/connect", "Saved.", "")
 	}
 }
 
@@ -343,11 +369,10 @@ func (u *UI) reposPage(w http.ResponseWriter, r *http.Request) {
 		groups = append(groups, g)
 	}
 	u.render(w, r, "repos", map[string]any{
-		"Groups":            groups,
-		"Q":                 r.URL.Query().Get("q"),
-		"PublicURL":         u.PublicURL(),
-		"ExecutorAvailable": u.ExecutorAvailable,
-		"ExecutorReason":    u.ExecutorReason,
+		"Groups":    groups,
+		"Q":         r.URL.Query().Get("q"),
+		"PublicURL": u.PublicURL(),
+		"Ex":        u.Executor(r.Context()),
 	})
 }
 
@@ -366,21 +391,21 @@ func (u *UI) watch(w http.ResponseWriter, r *http.Request) {
 	repo := repoFromForm(r)
 	c, ok := u.Clients.Get(repo.Platform)
 	if !ok || repo.FullName == "" {
-		redirect(w, r, "/repos", "", "Dự án không hợp lệ.")
+		redirect(w, r, "/repos", "", "Invalid project.")
 		return
 	}
 	rec := store.Repo{
 		Platform: string(repo.Platform), ID: repo.ID, FullName: repo.FullName,
 		DefaultBranch: repo.DefaultBranch, InstallationID: repo.InstallationID, Mode: "poll",
 	}
-	msg := fmt.Sprintf("Đang theo dõi %s (hỏi %s mỗi 30 giây). Hãy mở hoặc push một MR để thử.", repo.FullName, title(repo.Platform))
+	msg := fmt.Sprintf("Now watching %s (repoguard polls %s every 30 seconds). Open or push to a merge request to try it.", repo.FullName, title(repo.Platform))
 	if pub := u.PublicURL(); pub != "" {
 		id, err := c.CreateWebhook(r.Context(), repo, pub+"/webhooks/"+string(repo.Platform), u.Secret(repo.Platform))
 		if err == nil {
 			rec.Mode, rec.HookID = "webhook", id
-			msg = fmt.Sprintf("Đã tạo webhook cho %s. MR mới sẽ được kiểm tra ngay lập tức.", repo.FullName)
+			msg = fmt.Sprintf("Webhook created for %s. New merge requests are checked immediately.", repo.FullName)
 		} else {
-			msg = fmt.Sprintf("Không tạo được webhook (%v), nên chuyển sang chế độ hỏi định kỳ. %s", err, msg)
+			msg = fmt.Sprintf("Could not create a webhook (%v), so repoguard falls back to polling. %s", err, msg)
 		}
 	}
 	if err := u.Store.Update(func(s *store.Settings) { s.Repos[rec.Key()] = rec }); err != nil {
@@ -395,7 +420,7 @@ func (u *UI) unwatch(w http.ResponseWriter, r *http.Request) {
 	key := store.Key(string(repo.Platform), repo.FullName)
 	rec, ok := u.Store.Get().Repos[key]
 	if !ok {
-		redirect(w, r, "/repos", "", "Dự án chưa được bật.")
+		redirect(w, r, "/repos", "", "This project is not being watched.")
 		return
 	}
 	if rec.HookID != "" {
@@ -409,7 +434,7 @@ func (u *UI) unwatch(w http.ResponseWriter, r *http.Request) {
 		redirect(w, r, "/repos", "", err.Error())
 		return
 	}
-	redirect(w, r, "/repos", "Đã tắt kiểm tra cho "+repo.FullName+".", "")
+	redirect(w, r, "/repos", "Stopped checking "+repo.FullName+".", "")
 }
 
 func (u *UI) toggleExecutor(w http.ResponseWriter, r *http.Request) {
@@ -429,9 +454,9 @@ func (u *UI) toggleExecutor(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		redirect(w, r, "/repos", "", err.Error())
 	case on:
-		redirect(w, r, "/repos", "Đã bật tự chạy CI cho "+repo.FullName+". Mỗi lần có commit mới trong MR, repoguard sẽ tự build và test.", "")
+		redirect(w, r, "/repos", "CI builds turned on for "+repo.FullName+". Every new commit in a merge request will be built and tested.", "")
 	default:
-		redirect(w, r, "/repos", "Đã tắt tự chạy CI cho "+repo.FullName+".", "")
+		redirect(w, r, "/repos", "CI builds turned off for "+repo.FullName+".", "")
 	}
 }
 
@@ -440,11 +465,11 @@ func (u *UI) checkNow(w http.ResponseWriter, r *http.Request) {
 	n, err := u.Poller.CheckNow(r.Context(), repo)
 	switch {
 	case err != nil:
-		redirect(w, r, "/repos", "", "Không đọc được danh sách MR: "+err.Error())
+		redirect(w, r, "/repos", "", "Could not list merge requests: "+err.Error())
 	case n == 0:
-		redirect(w, r, "/repos", repo.FullName+" chưa có MR nào đang mở.", "")
+		redirect(w, r, "/repos", repo.FullName+" has no open merge requests.", "")
 	default:
-		redirect(w, r, "/", fmt.Sprintf("Đã xếp hàng kiểm tra %d MR của %s. Kết quả sẽ hiện ở bảng bên dưới và trên từng MR.", n, repo.FullName), "")
+		redirect(w, r, "/", fmt.Sprintf("Queued %d merge request(s) of %s for checking. Results appear below and on each merge request.", n, repo.FullName), "")
 	}
 }
 
@@ -488,15 +513,25 @@ func title(k platform.Kind) string {
 	return "GitHub"
 }
 
+var eventLabels = map[string]string{
+	"change_request.opened":  "New MR / new commits",
+	"change_request.updated": "MR edited",
+	"change_request.merged":  "MR merged",
+	"issue.opened":           "New issue",
+	"issue.edited":           "Issue edited",
+	"issue.activity":         "New comment",
+	"ci.build":               "CI build",
+}
+
 func ago(t time.Time) string {
 	d := time.Since(t)
 	switch {
 	case d < time.Minute:
-		return "vừa xong"
+		return "just now"
 	case d < time.Hour:
-		return fmt.Sprintf("%d phút trước", int(d.Minutes()))
+		return fmt.Sprintf("%d min ago", int(d.Minutes()))
 	case d < 24*time.Hour:
-		return fmt.Sprintf("%d giờ trước", int(d.Hours()))
+		return fmt.Sprintf("%d h ago", int(d.Hours()))
 	}
-	return t.Format("02/01 15:04")
+	return t.Format("Jan 2 15:04")
 }

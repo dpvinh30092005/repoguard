@@ -1,23 +1,23 @@
 {{define "content"}}
-<h1>Tổng quan</h1>
-<p class="lead">Trang này tự làm mới mỗi 15 giây.</p>
+<h1>Overview</h1>
+<p class="lead">This page refreshes every 15 seconds.</p>
 
 {{if not .Connected}}
 <div class="card">
-  <h2>Bắt đầu trong 3 bước</h2>
+  <h2>Get started in 3 steps</h2>
   <ol class="steps">
-    <li><a href="/connect"><b>Kết nối GitLab hoặc GitHub</b></a>: dán URL và token, bấm “Lưu & kiểm tra”.</li>
-    <li><b>Chọn dự án</b> ở trang Dự án, bấm “Bật kiểm tra”.</li>
-    <li><b>Mở hoặc push một Merge Request</b>. Kết quả hiện ở bảng bên dưới và trong comment trên MR.</li>
+    <li><a href="/connect"><b>Connect GitLab or GitHub</b></a>: paste the URL and a token, then click “Save &amp; test”.</li>
+    <li><b>Pick a project</b> on the Projects page and click “Start checking”.</li>
+    <li><b>Open or push to a merge request</b>. Results show up below and as comments on the merge request.</li>
   </ol>
 </div>
 {{else if not .Repos}}
 <div class="card">
-  <h2>Gần xong rồi</h2>
+  <h2>Almost there</h2>
   <ol class="steps">
-    <li class="done">Đã kết nối{{if .GitLab.User}} GitLab (@{{.GitLab.User}}){{end}}{{if .GitHub.User}} GitHub (@{{.GitHub.User}}){{end}}.</li>
-    <li><a href="/repos"><b>Chọn dự án</b></a> muốn kiểm tra và bấm “Bật kiểm tra”.</li>
-    <li><b>Mở hoặc push một Merge Request</b> trong dự án đó.</li>
+    <li class="done">Connected{{if .GitLab.User}} to GitLab (@{{.GitLab.User}}){{end}}{{if .GitHub.User}} to GitHub (@{{.GitHub.User}}){{end}}.</li>
+    <li><a href="/repos"><b>Pick the projects</b></a> you want checked and click “Start checking”.</li>
+    <li><b>Open or push to a merge request</b> in one of them.</li>
   </ol>
 </div>
 {{end}}
@@ -25,62 +25,63 @@
 <div class="grid">
   <div class="card stat">
     <div class="label">GitLab</div>
-    <div class="value">{{if .GitLab.User}}<span class="badge b-ok">Đã kết nối</span> @{{.GitLab.User}}{{else if .GitLab.Err}}<span class="badge b-bad">Lỗi</span>{{else}}<span class="badge b-mute">Chưa kết nối</span>{{end}}</div>
+    <div class="value">{{if .GitLab.User}}<span class="badge b-ok">Connected</span> @{{.GitLab.User}}{{else if .GitLab.Err}}<span class="badge b-bad">Error</span>{{else}}<span class="badge b-mute">Not connected</span>{{end}}</div>
   </div>
   <div class="card stat">
     <div class="label">GitHub</div>
-    <div class="value">{{if .GitHub.User}}<span class="badge b-ok">Đã kết nối</span> @{{.GitHub.User}}{{else if .GitHub.Err}}<span class="badge b-bad">Lỗi</span>{{else}}<span class="badge b-mute">Chưa kết nối</span>{{end}}</div>
+    <div class="value">{{if .GitHub.User}}<span class="badge b-ok">Connected</span> @{{.GitHub.User}}{{else if .GitHub.Err}}<span class="badge b-bad">Error</span>{{else}}<span class="badge b-mute">Not connected</span>{{end}}</div>
   </div>
   <div class="card stat">
-    <div class="label">Dự án đang theo dõi</div>
-    <div class="value">{{len .Repos}} dự án · {{.ExecutorRepos}} tự chạy CI</div>
+    <div class="label">Watched projects</div>
+    <div class="value">{{len .Repos}} project(s) · {{.ExecutorRepos}} with CI builds</div>
   </div>
   <div class="card stat">
-    <div class="label">Tự chạy CI (executor)</div>
+    <div class="label">CI builds ({{if eq .Ex.Backend "jenkins"}}Jenkins{{else}}Docker{{end}})</div>
     <div class="value">
-      {{if not .ExecutorAvailable}}<span class="badge b-mute">Không khả dụng</span>
-      {{else if .ImagePresent}}<span class="badge b-ok">Sẵn sàng</span>
-      {{else}}<span class="badge b-warn">Thiếu image</span>{{end}}
+      {{if not .Ex.Available}}<span class="badge b-mute">Unavailable</span>
+      {{else if and (eq .Ex.Backend "docker") (not .Ex.ImagePresent)}}<span class="badge b-warn">Image missing</span>
+      {{else}}<span class="badge b-ok">Ready</span>{{end}}
+      {{if .Ex.Sonar}}<span class="badge b-ok">+ SonarQube</span>{{end}}
     </div>
   </div>
   <div class="card stat">
     <div class="label">AI review</div>
-    <div class="value">{{if .AI}}<span class="badge b-ok">Bật</span>{{else}}<span class="badge b-mute">Tắt</span>{{end}} · hàng đợi: {{.Queue}}</div>
+    <div class="value">{{if .AI}}<span class="badge b-ok">On</span>{{else}}<span class="badge b-mute">Off</span>{{end}} · queue: {{.Queue}}</div>
   </div>
 </div>
 
-{{if and .ExecutorAvailable (not .ImagePresent) .ExecutorRepos}}
+{{if and .Ex.Available (eq .Ex.Backend "docker") (not .Ex.ImagePresent) .ExecutorRepos}}
 <div class="card">
-  <h2>⚠️ Chưa có image để chạy CI</h2>
-  <p>Có dự án đang bật “Tự chạy CI” nhưng máy chưa có image <code>{{.Image}}</code>. Chạy lệnh này trong thư mục repoguard (một lần, khoảng 5–10 phút):</p>
-  <p><code>docker build -f deploy/ci-runner.Dockerfile -t {{.Image}} .</code></p>
+  <h2>⚠️ The CI build image is missing</h2>
+  <p>A project has CI builds turned on, but this machine has no <code>{{.Ex.Image}}</code> image yet. Build it once from the repoguard directory (about 5–10 minutes):</p>
+  <p><code>docker build -f deploy/ci-runner.Dockerfile -t {{.Ex.Image}} .</code></p>
 </div>
 {{end}}
-{{if not .ExecutorAvailable}}<p class="hint">Tự chạy CI: {{.ExecutorReason}}</p>{{end}}
+{{if not .Ex.Available}}<p class="hint">CI builds: {{.Ex.Reason}}</p>{{end}}
 
 <div class="card">
-  <h2>Hoạt động gần đây</h2>
+  <h2>Recent activity</h2>
   {{if .Activity}}
   <div class="scroll"><table>
-    <tr><th>Lúc</th><th>Dự án</th><th>Loại</th><th>Việc</th><th>Kết quả</th></tr>
+    <tr><th>When</th><th>Project</th><th>Item</th><th>Event</th><th>Result</th></tr>
     {{range .Activity}}
     <tr>
       <td class="muted">{{ago .Time}}</td>
       <td>{{.Repo}}</td>
       <td>{{if .URL}}<a href="{{.URL}}" target="_blank" rel="noopener">{{.Kind}} #{{.Number}}</a>{{else}}{{.Kind}} #{{.Number}}{{end}}</td>
-      <td class="muted">{{.Event}}</td>
+      <td class="muted">{{eventLabel .Event}}</td>
       <td>
-        {{if or (eq .Result "ok") (eq .Result "passed")}}<span class="badge b-ok">{{if eq .Result "passed"}}CI pass{{else}}xong{{end}}</span>
-        {{else if eq .Result "failed"}}<span class="badge b-bad">CI fail</span>
-        {{else if eq .Result "skipped"}}<span class="badge b-mute">bỏ qua</span>
-        {{else}}<span class="badge b-bad">lỗi</span>{{end}}
+        {{if or (eq .Result "ok") (eq .Result "passed")}}<span class="badge b-ok">{{if eq .Result "passed"}}passed{{else}}done{{end}}</span>
+        {{else if eq .Result "failed"}}<span class="badge b-bad">failed</span>
+        {{else if eq .Result "skipped"}}<span class="badge b-mute">skipped</span>
+        {{else}}<span class="badge b-bad">error</span>{{end}}
         {{if .Detail}}<div class="hint">{{.Detail}}</div>{{end}}
       </td>
     </tr>
     {{end}}
   </table></div>
   {{else}}
-  <p class="muted">Chưa có hoạt động nào. Sau khi bật một dự án, hãy mở hoặc push một Merge Request (hoặc bấm “Kiểm tra ngay” ở trang Dự án).</p>
+  <p class="muted">Nothing yet. Once a project is watched, open or push to a merge request (or click “Check now” on the Projects page).</p>
   {{end}}
 </div>
 {{end}}

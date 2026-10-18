@@ -19,6 +19,7 @@ func TestScanLine(t *testing.T) {
 		want string // rule id, "" = no finding
 	}{
 		{`key := "` + aws + `"`, "aws-access-key"},
+		{`apiKey = "` + aws + `"`, "aws-access-key"}, // not also reported as generic-secret
 		{`token: ` + gh, "github-token"},
 		{`-----BEGIN RSA PRIVATE KEY-----`, "private-key"},   // repoguard:allow (fixture)
 		{`DB_PASSWORD="Zx8#qLm2!vR9tYp4"`, "generic-secret"}, // repoguard:allow (fixture)

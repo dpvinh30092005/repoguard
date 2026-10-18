@@ -1,72 +1,116 @@
 {{define "content"}}
-<h1>Kết nối</h1>
-<p class="lead">Nhập thông tin một lần, repoguard tự lưu lại. Token được lưu trong file <code>data/settings.json</code> trên máy chạy repoguard.</p>
+<h1>Connections</h1>
+<p class="lead">Enter these once and repoguard remembers them. Tokens are stored in <code>data/settings.json</code> on the machine running repoguard.</p>
 
 <div class="card">
-  <h2>GitLab {{if .GitLab.User}}<span class="badge b-ok">Đã kết nối · @{{.GitLab.User}}</span>{{else if .GitLab.Err}}<span class="badge b-bad">Lỗi</span>{{end}}</h2>
+  <h2>GitLab {{if .GitLab.User}}<span class="badge b-ok">Connected · @{{.GitLab.User}}</span>{{else if .GitLab.Err}}<span class="badge b-bad">Error</span>{{end}}</h2>
   {{if .GitLab.Err}}<div class="flash err">{{.GitLab.Err}}</div>{{end}}
   {{if .Locked.gitlab}}
-    <p class="muted">Đang dùng cấu hình từ biến môi trường <code>GITLAB_URL</code> / <code>GITLAB_TOKEN</code>.</p>
+    <p class="muted">Configured by the <code>GITLAB_URL</code> / <code>GITLAB_TOKEN</code> environment variables.</p>
   {{else}}
   <form method="post" action="/connect">
     <input type="hidden" name="section" value="gitlab">
-    <label for="gl-url">Địa chỉ GitLab</label>
+    <label for="gl-url">GitLab URL</label>
     <input id="gl-url" type="url" name="gitlab_url" value="{{if .S.GitLabURL}}{{.S.GitLabURL}}{{else}}https://gitlab.com{{end}}" required>
-    <div class="hint">Ví dụ <code>https://gitlab.com</code> hoặc GitLab của công ty <code>https://gitlab.congty.vn</code>.</div>
+    <div class="hint">For example <code>https://gitlab.com</code> or your company's <code>https://gitlab.example.com</code>.</div>
     <label for="gl-token">Access token</label>
-    <input id="gl-token" type="password" name="gitlab_token" autocomplete="off" placeholder="{{if .S.GitLabToken}}•••••• đã lưu — để trống nếu không đổi{{else}}glpat-...{{end}}">
-    <div class="hint">Tạo ở GitLab → avatar → <b>Preferences → Access tokens</b>, tick quyền <b>api</b>.</div>
-    <p class="row"><button type="submit">Lưu &amp; kiểm tra</button>
-    {{if .S.GitLabToken}}<button class="danger small" type="submit" name="clear" value="1">Xoá kết nối</button>{{end}}</p>
+    <input id="gl-token" type="password" name="gitlab_token" autocomplete="off" placeholder="{{if .S.GitLabToken}}•••••• saved, leave empty to keep it{{else}}glpat-...{{end}}">
+    <div class="hint">Create one in GitLab under avatar → <b>Preferences → Access tokens</b> with the <b>api</b> scope.</div>
+    <p class="row"><button type="submit">Save &amp; test</button>
+    {{if .S.GitLabToken}}<button class="danger small" type="submit" name="clear" value="1">Disconnect</button>{{end}}</p>
   </form>
   {{end}}
 </div>
 
 <div class="card">
-  <h2>GitHub {{if .GitHub.User}}<span class="badge b-ok">Đã kết nối · @{{.GitHub.User}}</span>{{else if .GitHub.Err}}<span class="badge b-bad">Lỗi</span>{{end}}</h2>
+  <h2>GitHub {{if .GitHub.User}}<span class="badge b-ok">Connected · @{{.GitHub.User}}</span>{{else if .GitHub.Err}}<span class="badge b-bad">Error</span>{{end}}</h2>
   {{if .GitHub.Err}}<div class="flash err">{{.GitHub.Err}}</div>{{end}}
   {{if .Locked.github}}
-    <p class="muted">Đang dùng cấu hình từ biến môi trường (GitHub App hoặc <code>GITHUB_TOKEN</code>).</p>
+    <p class="muted">Configured by environment variables (GitHub App or <code>GITHUB_TOKEN</code>).</p>
   {{else}}
   <form method="post" action="/connect">
     <input type="hidden" name="section" value="github">
     <label for="gh-token">Personal access token</label>
-    <input id="gh-token" type="password" name="github_token" autocomplete="off" placeholder="{{if .S.GitHubToken}}•••••• đã lưu — để trống nếu không đổi{{else}}github_pat_...{{end}}">
-    <div class="hint">GitHub → Settings → Developer settings → <b>Fine-grained tokens</b>. Quyền: Contents đọc; Pull requests, Issues, Commit statuses đọc &amp; ghi; Webhooks đọc &amp; ghi (nếu dùng webhook).</div>
-    <label for="gh-api">API URL <span class="muted">(chỉ đổi nếu dùng GitHub Enterprise)</span></label>
+    <input id="gh-token" type="password" name="github_token" autocomplete="off" placeholder="{{if .S.GitHubToken}}•••••• saved, leave empty to keep it{{else}}github_pat_...{{end}}">
+    <div class="hint">GitHub → Settings → Developer settings → <b>Fine-grained tokens</b>. Permissions: Contents read; Pull requests, Issues and Commit statuses read &amp; write; Webhooks read &amp; write (for webhook mode).</div>
+    <label for="gh-api">API URL <span class="muted">(change only for GitHub Enterprise)</span></label>
     <input id="gh-api" type="url" name="github_api_url" value="{{if .S.GitHubAPIURL}}{{.S.GitHubAPIURL}}{{else}}https://api.github.com{{end}}">
-    <p class="row"><button type="submit">Lưu &amp; kiểm tra</button>
-    {{if .S.GitHubToken}}<button class="danger small" type="submit" name="clear" value="1">Xoá kết nối</button>{{end}}</p>
+    <p class="row"><button type="submit">Save &amp; test</button>
+    {{if .S.GitHubToken}}<button class="danger small" type="submit" name="clear" value="1">Disconnect</button>{{end}}</p>
   </form>
   {{end}}
 </div>
 
 <div class="card">
-  <h2>AI review <span class="muted">(tuỳ chọn)</span> {{if .AI}}<span class="badge b-ok">Bật</span>{{end}}</h2>
+  <h2>AI review <span class="muted">(optional)</span> {{if .AI}}<span class="badge b-ok">On</span>{{end}}</h2>
   {{if .Locked.ai}}
-    <p class="muted">Đang dùng <code>ANTHROPIC_API_KEY</code> từ biến môi trường.</p>
+    <p class="muted">Using <code>ANTHROPIC_API_KEY</code> from the environment.</p>
   {{else}}
   <form method="post" action="/connect">
     <input type="hidden" name="section" value="ai">
     <label for="ai-key">Anthropic API key</label>
-    <input id="ai-key" type="password" name="anthropic_key" autocomplete="off" placeholder="{{if .S.AnthropicKey}}•••••• đã lưu{{else}}sk-ant-...{{end}}">
-    <div class="hint">Có key thì Claude sẽ đọc diff và góp ý trên từng dòng code của MR. Không có cũng không sao.</div>
-    <p class="row"><button type="submit">Lưu</button>
-    {{if .S.AnthropicKey}}<button class="danger small" type="submit" name="clear" value="1">Tắt AI review</button>{{end}}</p>
+    <input id="ai-key" type="password" name="anthropic_key" autocomplete="off" placeholder="{{if .S.AnthropicKey}}•••••• saved{{else}}sk-ant-...{{end}}">
+    <div class="hint">With a key, Claude reads each diff and leaves inline review comments. Everything else works without one.</div>
+    <p class="row"><button type="submit">Save</button>
+    {{if .S.AnthropicKey}}<button class="danger small" type="submit" name="clear" value="1">Turn off AI review</button>{{end}}</p>
   </form>
   {{end}}
 </div>
 
 <div class="card">
-  <h2>Nâng cao <span class="muted">(có thể bỏ qua)</span></h2>
+  <h2>Where CI builds run {{if .Ex.Available}}<span class="badge b-ok">{{if eq .Ex.Backend "jenkins"}}Jenkins{{else}}Docker{{end}} · ready</span>{{else}}<span class="badge b-mute">Not ready</span>{{end}}</h2>
+  <p class="muted">Used by projects with CI builds turned on (for example when GitLab pipelines are disabled). {{if not .Ex.Available}}{{.Ex.Reason}}{{end}}</p>
+  {{if .Locked.executor}}
+    <p class="muted">Configured by the <code>REPOGUARD_EXECUTOR</code> environment variable{{if .Ex.Detail}} ({{.Ex.Detail}}){{end}}.</p>
+  {{else}}
+  <form method="post" action="/connect">
+    <input type="hidden" name="section" value="build">
+    <label><input type="radio" name="build_backend" value="docker" {{if ne .S.BuildBackend "jenkins"}}checked{{end}}> Docker on the machine running repoguard</label>
+    <label for="img" style="font-weight:400;margin-left:24px">Build image</label>
+    <input id="img" type="text" name="executor_image" value="{{.S.ExecutorImage}}" placeholder="repoguard-ci:local" style="margin-left:24px;width:calc(100% - 24px)">
+    <label style="margin-top:16px"><input type="radio" name="build_backend" value="jenkins" {{if eq .S.BuildBackend "jenkins"}}checked{{end}}> Jenkins</label>
+    <div style="margin-left:24px">
+      <label for="j-url">Jenkins URL</label>
+      <input id="j-url" type="url" name="jenkins_url" value="{{.S.JenkinsURL}}" placeholder="http://jenkins:8080">
+      <label for="j-user">User</label>
+      <input id="j-user" type="text" name="jenkins_user" value="{{.S.JenkinsUser}}" placeholder="admin">
+      <label for="j-token">API token</label>
+      <input id="j-token" type="password" name="jenkins_token" autocomplete="off" placeholder="{{if .S.JenkinsToken}}•••••• saved, leave empty to keep it{{else}}Jenkins → your user → Configure → API Token{{end}}">
+      <label for="j-job">Job name</label>
+      <input id="j-job" type="text" name="jenkins_job" value="{{.S.JenkinsJob}}" placeholder="repoguard-ci">
+      <div class="hint">A job based on <code>ci-templates/jenkins/Jenkinsfile</code>. The <code>deploy/stack</code> setup creates it for you.</div>
+    </div>
+    <p><button type="submit">Save</button></p>
+  </form>
+  {{end}}
+</div>
+
+<div class="card">
+  <h2>SonarQube <span class="muted">(optional)</span> {{if .Ex.Sonar}}<span class="badge b-ok">On</span>{{end}}</h2>
+  {{if .Locked.sonar}}
+    <p class="muted">Using <code>SONAR_HOST_URL</code> / <code>SONAR_TOKEN</code> from the environment.</p>
+  {{else}}
+  <form method="post" action="/connect">
+    <input type="hidden" name="section" value="sonar">
+    <label for="s-url">SonarQube URL</label>
+    <input id="s-url" type="url" name="sonar_url" value="{{.S.SonarURL}}" placeholder="http://sonarqube:9000">
+    <label for="s-token">Analysis token</label>
+    <input id="s-token" type="password" name="sonar_token" autocomplete="off" placeholder="{{if .S.SonarToken}}•••••• saved{{else}}squ_... (My Account → Security → Global Analysis Token){{end}}">
+    <div class="hint">For Docker builds, repoguard passes the URL and token into the build so <code>sonar-scanner</code> runs and the Quality Gate shows up on the merge request. For Jenkins builds, set these two variables on Jenkins instead.</div>
+    <p class="row"><button type="submit">Save</button>
+    {{if .S.SonarToken}}<button class="danger small" type="submit" name="clear" value="1">Turn off SonarQube</button>{{end}}</p>
+  </form>
+  {{end}}
+</div>
+
+<div class="card">
+  <h2>Advanced <span class="muted">(optional)</span></h2>
   <form method="post" action="/connect">
     <input type="hidden" name="section" value="advanced">
-    <label for="pub">Địa chỉ công khai của repoguard</label>
-    <input id="pub" type="url" name="public_url" value="{{.S.PublicURL}}" placeholder="https://repoguard.congty.vn" {{if .Locked.public_url}}disabled{{end}}>
-    <div class="hint">Để trống: repoguard tự hỏi GitLab/GitHub mỗi 30 giây (chạy được trên máy cá nhân, không cần mở cổng). Nếu điền: repoguard tạo webhook để phản hồi ngay lập tức. Webhook secret: <code>{{.Secret}}</code></div>
-    <label for="img">Image dùng để tự chạy CI</label>
-    <input id="img" type="text" name="executor_image" value="{{.S.ExecutorImage}}" placeholder="repoguard-ci:local" {{if .Locked.image}}disabled{{end}}>
-    <p><button type="submit">Lưu</button></p>
+    <label for="pub">Public URL of repoguard</label>
+    <input id="pub" type="url" name="public_url" value="{{.S.PublicURL}}" placeholder="https://repoguard.example.com" {{if .Locked.public_url}}disabled{{end}}>
+    <div class="hint">Leave empty and repoguard polls GitLab/GitHub every 30 seconds, which works on a laptop with no open ports. Fill it in and repoguard creates webhooks for instant reactions. Webhook secret: <code>{{.Secret}}</code></div>
+    <p><button type="submit">Save</button></p>
   </form>
 </div>
 {{end}}

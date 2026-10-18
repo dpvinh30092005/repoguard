@@ -1,6 +1,6 @@
 // Command repoguard checks code and issues on GitHub and GitLab.
 //
-//	repoguard serve   run the webhook service (GitHub App / GitLab webhooks)
+//	repoguard serve   run the service: web UI, webhooks, polling, executor
 //	repoguard ci      run build/test/secret/vulnerability checks inside a CI job
 //	repoguard sweep   apply stale/SLA policies once (for cron jobs)
 //	repoguard version
@@ -14,12 +14,13 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/dpvinh30092005/repoguard/internal/activity"
 	"github.com/dpvinh30092005/repoguard/internal/checks"
 	"github.com/dpvinh30092005/repoguard/internal/checks/aireview"
 	"github.com/dpvinh30092005/repoguard/internal/checks/prrules"
@@ -30,10 +31,11 @@ import (
 	"github.com/dpvinh30092005/repoguard/internal/executor"
 	"github.com/dpvinh30092005/repoguard/internal/metrics"
 	"github.com/dpvinh30092005/repoguard/internal/platform"
-	"github.com/dpvinh30092005/repoguard/internal/platform/github"
-	"github.com/dpvinh30092005/repoguard/internal/platform/gitlab"
+	"github.com/dpvinh30092005/repoguard/internal/poller"
 	"github.com/dpvinh30092005/repoguard/internal/queue"
 	"github.com/dpvinh30092005/repoguard/internal/server"
+	"github.com/dpvinh30092005/repoguard/internal/store"
+	"github.com/dpvinh30092005/repoguard/internal/web"
 )
 
 var version = "dev" // set with -ldflags "-X main.version=..."
@@ -80,75 +82,76 @@ func newLogger() *slog.Logger {
 	return slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 }
 
-// build wires platform clients, checks and the engine from the environment.
-func build(log *slog.Logger, m *metrics.Registry) (config.Service, *engine.Engine, error) {
+// setup builds the long-lived parts of the service from env + stored settings.
+func setup(log *slog.Logger, m *metrics.Registry, act *activity.Log) (*app, *engine.Engine, error) {
 	cfg, err := config.LoadService()
 	if err != nil {
-		return cfg, nil, err
+		return nil, nil, err
 	}
-	hc := platform.NewHTTPClient()
-	var clients []platform.Client
-	if cfg.GitHub.Enabled() {
-		var app *github.AppAuth
-		if cfg.GitHub.AppID != 0 {
-			if app, err = github.NewAppAuth(cfg.GitHub.AppID, cfg.GitHub.PrivateKeyPEM, cfg.GitHub.APIURL, hc); err != nil {
-				return cfg, nil, err
-			}
-		}
-		clients = append(clients, github.New(cfg.GitHub.APIURL, app, cfg.GitHub.Token, hc))
-		log.Info("github enabled", "api", cfg.GitHub.APIURL, "app", cfg.GitHub.AppID != 0)
+	dataDir := firstNonEmpty(os.Getenv("REPOGUARD_DATA_DIR"), "data")
+	st, err := store.Open(filepath.Join(dataDir, "settings.json"))
+	if err != nil {
+		return nil, nil, err
 	}
-	if cfg.GitLab.Enabled() {
-		clients = append(clients, gitlab.New(cfg.GitLab.URL, cfg.GitLab.Token, hc))
-		log.Info("gitlab enabled", "url", cfg.GitLab.URL)
+	a := newApp(cfg, st, log)
+	if cfg.Executor.Required() && !a.dockerOK {
+		return nil, nil, fmt.Errorf("REPOGUARD_EXECUTOR=docker: %s", a.dockerWhy)
 	}
-
-	cks := []checks.Check{prrules.Check{}, secrets.Check{}}
-	if cfg.AI.Enabled() {
-		cks = append(cks, aireview.Check{Reviewer: aireview.NewClaude(cfg.AI.APIKey, cfg.AI.Model, cfg.AI.Effort)})
-		log.Info("ai review enabled", "model", cfg.AI.Model, "effort", cfg.AI.Effort)
-	} else {
-		log.Info("ai review disabled: ANTHROPIC_API_KEY not set")
-	}
-
-	eng := engine.New(clients, cks, log, m)
-	eng.PublicURL = cfg.PublicURL
-	return cfg, eng, nil
+	cks := []checks.Check{prrules.Check{}, secrets.Check{}, aireview.Check{Reviewer: a.reviewer}}
+	eng := engine.New(nil, cks, log, m)
+	eng.Clients, eng.Activity, eng.PublicURL = a.reg, act, cfg.PublicURL
+	return a, eng, nil
 }
 
 func serve(ctx context.Context) error {
 	log := newLogger()
 	m := metrics.New()
-	cfg, eng, err := build(log, m)
+	act := activity.New(200)
+	a, eng, err := setup(log, m, act)
 	if err != nil {
 		return err
 	}
+	cfg := a.cfg
 	q := queue.New(queue.Options{Workers: cfg.Workers, Size: cfg.QueueSize, MaxRetries: 4, Logger: log, Metrics: m})
 	q.Start(ctx)
 
-	x, xq, err := newExecutor(cfg.Executor, eng, log, m)
+	var xq *queue.Queue
+	if !cfg.Executor.Disabled() {
+		xq = queue.New(queue.Options{Workers: cfg.Executor.Concurrency, Size: 200, MaxRetries: 1, JobTimeout: cfg.Executor.Timeout + 10*time.Minute, Logger: log, Metrics: m})
+		xq.Start(ctx)
+		a.exec = &executor.Executor{Clients: a.reg, Queue: xq, Allow: a.allow, Log: log, Metrics: m, Activity: act}
+		eng.Executor = a.exec
+	}
+
+	enqueue := func(ev platform.Event) {
+		if err := q.Enqueue(queue.Job{Key: ev.Key(), Run: func(ctx context.Context) error { return eng.Handle(ctx, ev) }}); err != nil && !errors.Is(err, queue.ErrDuplicate) {
+			log.Warn("enqueue failed", "event", ev.Type, "repo", ev.Repo.String(), "err", err)
+		}
+	}
+	interval, err := time.ParseDuration(firstNonEmpty(os.Getenv("REPOGUARD_POLL_INTERVAL"), "30s"))
 	if err != nil {
+		return fmt.Errorf("REPOGUARD_POLL_INTERVAL: %w", err)
+	}
+	p := &poller.Poller{Clients: a.reg, Repos: func() []platform.Repo { return a.watchedRepos("poll") }, Enqueue: enqueue, Interval: interval, Log: log}
+
+	ui := &web.UI{
+		Store: a.store, Clients: a.reg, Activity: act, Poller: p, Log: log, Version: version,
+		Password: a.password, Apply: a.apply, Secret: a.secret, PublicURL: a.publicURL,
+		QueueDepth: q.Depth, AIEnabled: a.reviewer.Available, Locked: a.locked(), Executor: a.executorInfo,
+	}
+	if err := ui.Init(ctx); err != nil { // also applies the stored settings once
 		return err
 	}
-	if x != nil {
-		xq.Start(ctx)
-		eng.Executor = x
-	}
-
+	go p.Run(ctx)
 	if cfg.SweepInterval > 0 {
-		go runSweeper(ctx, cfg.SweepInterval, eng, q, log)
+		go runSweeper(ctx, cfg.SweepInterval, a, eng, q, log)
 	}
 
-	srv := &server.Server{Queue: q, Handle: eng.Handle, Log: log, Metrics: m, Secret: func(k platform.Kind) string {
-		switch {
-		case k == platform.GitHub && cfg.GitHub.Enabled():
-			return cfg.GitHub.WebhookSecret
-		case k == platform.GitLab && cfg.GitLab.Enabled():
-			return cfg.GitLab.WebhookSecret
-		}
-		return ""
-	}}
-	log.Info("repoguard starting", "version", version, "workers", cfg.Workers)
+	srv := &server.Server{Queue: q, Handle: eng.Handle, Log: log, Metrics: m, Secret: a.secret, UI: ui.Routes()}
+	if os.Getenv("REPOGUARD_ADMIN_PASSWORD") == "" {
+		log.Info("web UI admin password (set REPOGUARD_ADMIN_PASSWORD to choose your own)", "admin password", a.password())
+	}
+	log.Info("repoguard starting", "version", version, "addr", cfg.Addr, "workers", cfg.Workers)
 	err = server.ListenAndServe(ctx, cfg.Addr, srv.Routes(), log)
 
 	drain, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -168,52 +171,10 @@ func serve(ctx context.Context) error {
 	return err
 }
 
-// newExecutor builds the CI executor: Jenkins when configured, else a local
-// Docker sandbox if Docker is available. It returns nil when there is neither.
-func newExecutor(cfg config.Executor, eng *engine.Engine, log *slog.Logger, m *metrics.Registry) (*executor.Executor, *queue.Queue, error) {
-	if cfg.Disabled() {
-		return nil, nil, nil
-	}
-	x := &executor.Executor{
-		Clients: eng.Clients,
-		Allow:   executor.AllowGlobs(cfg.Repos), // nothing is built unless allowed
-		Log:     log,
-		Metrics: m,
-	}
-	if cfg.UseJenkins() {
-		j := cfg.Jenkins
-		x.Remote = &executor.Jenkins{URL: j.URL, User: j.User, Token: j.Token, Job: j.Job, Timeout: cfg.Timeout}
-		log.Info("executor enabled (jenkins)", "url", j.URL, "job", j.Job, "repos", cfg.Repos)
-	} else {
-		for _, bin := range []string{"docker", "git"} {
-			if _, err := exec.LookPath(bin); err != nil {
-				if cfg.Required() {
-					return nil, nil, fmt.Errorf("REPOGUARD_EXECUTOR=docker needs %q in PATH (use deploy/executor.Dockerfile)", bin)
-				}
-				log.Info("executor unavailable", "missing", bin)
-				return nil, nil, nil
-			}
-		}
-		if cfg.Image == "" {
-			cfg.Image = defaultExecutorImage
-		}
-		x.Sandbox = executor.Docker{
-			Image: cfg.Image, CPUs: cfg.CPUs, Memory: cfg.Memory, PidsLimit: cfg.PidsLimit,
-			Network: cfg.Network, Runtime: cfg.Runtime, Timeout: cfg.Timeout,
-		}
-		if s := cfg.Sonar; s.HostURL != "" && s.Token != "" {
-			x.Env = map[string]string{"SONAR_HOST_URL": s.HostURL, "SONAR_TOKEN": s.Token}
-		}
-		log.Info("executor enabled (docker)", "repos", cfg.Repos, "image", cfg.Image, "concurrency", cfg.Concurrency, "sonar", x.Env != nil)
-	}
-	x.Queue = queue.New(queue.Options{Workers: cfg.Concurrency, Size: 200, MaxRetries: 1, JobTimeout: cfg.Timeout + 10*time.Minute, Logger: log, Metrics: m})
-	return x, x.Queue, nil
-}
-
 // runSweeper enqueues one sweep job per repository every interval.
-func runSweeper(ctx context.Context, every time.Duration, eng *engine.Engine, q *queue.Queue, log *slog.Logger) {
+func runSweeper(ctx context.Context, every time.Duration, a *app, eng *engine.Engine, q *queue.Queue, log *slog.Logger) {
 	tick := func() {
-		repos, err := eng.Repos(ctx)
+		repos, err := a.sweepTargets(ctx, eng)
 		if err != nil {
 			log.Error("sweep: listing repos", "err", err)
 		}
@@ -237,11 +198,12 @@ func runSweeper(ctx context.Context, every time.Duration, eng *engine.Engine, q 
 
 func sweep(ctx context.Context) error {
 	log := newLogger()
-	_, eng, err := build(log, metrics.New())
+	a, eng, err := setup(log, metrics.New(), nil)
 	if err != nil {
 		return err
 	}
-	repos, err := eng.Repos(ctx)
+	a.apply(ctx)
+	repos, err := a.sweepTargets(ctx, eng)
 	var errs []error
 	if err != nil {
 		errs = append(errs, err)

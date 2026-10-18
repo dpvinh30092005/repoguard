@@ -24,6 +24,15 @@ type Settings struct {
 	PublicURL     string `json:"public_url,omitempty"`
 	ExecutorImage string `json:"executor_image,omitempty"`
 
+	// Where builds run when the executor is used: "docker" (default) or "jenkins".
+	BuildBackend string `json:"build_backend,omitempty"`
+	JenkinsURL   string `json:"jenkins_url,omitempty"`
+	JenkinsUser  string `json:"jenkins_user,omitempty"`
+	JenkinsToken string `json:"jenkins_token,omitempty"`
+	JenkinsJob   string `json:"jenkins_job,omitempty"`
+	SonarURL     string `json:"sonar_url,omitempty"`
+	SonarToken   string `json:"sonar_token,omitempty"`
+
 	// Generated once on first start.
 	WebhookSecret string `json:"webhook_secret"`
 	AdminPassword string `json:"admin_password"`

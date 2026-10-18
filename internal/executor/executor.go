@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/dpvinh30092005/repoguard/internal/activity"
 	"github.com/dpvinh30092005/repoguard/internal/ci"
@@ -45,11 +46,37 @@ type Executor struct {
 	// Remote, when set, builds on an external CI system (e.g. Jenkins) instead of the local sandbox.
 	Remote Remote
 
+	// mu guards Sandbox, Remote and Env when they are swapped at runtime via Configure.
+	mu sync.RWMutex
+
 	fetch func(ctx context.Context, src platform.GitSource, sha string) (string, error)
 }
 
+// Configure swaps the build backend at runtime (e.g. after a change in the
+// web UI). Builds already running keep the backend they started with.
+func (x *Executor) Configure(sandbox Sandbox, remote Remote, env map[string]string) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	x.Sandbox, x.Remote, x.Env = sandbox, remote, env
+}
+
+// Ready reports whether any build backend is configured.
+func (x *Executor) Ready() bool {
+	x.mu.RLock()
+	defer x.mu.RUnlock()
+	return x.Sandbox != nil || x.Remote != nil
+}
+
+func (x *Executor) backend() (Sandbox, Remote, map[string]string) {
+	x.mu.RLock()
+	defer x.mu.RUnlock()
+	return x.Sandbox, x.Remote, x.Env
+}
+
 // Allowed reports whether repo may be built. Nothing is allowed by default.
-func (x *Executor) Allowed(repo platform.Repo) bool { return x.Allow != nil && x.Allow(repo) }
+func (x *Executor) Allowed(repo platform.Repo) bool {
+	return x.Allow != nil && x.Allow(repo) && x.Ready()
+}
 
 // AllowGlobs allows repositories whose full name matches one of the globs (e.g. "team/*").
 func AllowGlobs(globs []string) func(platform.Repo) bool {
@@ -77,7 +104,7 @@ func (x *Executor) Run(ctx context.Context, repo platform.Repo, cr *platform.Cha
 	record := func(result, detail string) {
 		x.Activity.Add(activity.Entry{
 			Platform: string(repo.Platform), Repo: repo.FullName, Kind: "CI", Number: cr.Number,
-			Event: "sandbox build " + short(cr.HeadSHA), Result: result, Detail: detail,
+			Event: "ci.build", Result: result, Detail: "commit " + short(cr.HeadSHA) + " · " + detail,
 			URL: c.WebURL(repo, platform.CR(cr.Number)),
 		})
 	}
@@ -106,7 +133,7 @@ func (x *Executor) Run(ctx context.Context, repo platform.Repo, cr *platform.Cha
 	if err != nil {
 		return err
 	}
-	log.Info("executor: running", "remote", x.Remote != nil)
+	log.Info("executor: running")
 	res, err := x.build(ctx, c, repo, cr, src)
 	if errors.Is(err, ErrStale) {
 		log.Info("executor: head moved, skipping stale run")
@@ -141,12 +168,16 @@ func (x *Executor) build(ctx context.Context, c platform.Client, repo platform.R
 	if err != nil {
 		return Result{}, err
 	}
+	sandbox, remote, extraEnv := x.backend()
 	env := map[string]string{"REPOGUARD_REPO": repo.FullName}
-	for k, v := range x.Env {
+	for k, v := range extraEnv {
 		env[k] = v
 	}
-	if x.Remote != nil {
-		return x.Remote.Build(ctx, RemoteBuild{Repo: repo, CR: cr, CloneURL: src.URL, Ref: src.Ref, SHA: cr.HeadSHA, Policy: policy})
+	if remote != nil {
+		return remote.Build(ctx, RemoteBuild{Repo: repo, CR: cr, CloneURL: src.URL, Ref: src.Ref, SHA: cr.HeadSHA, Policy: policy})
+	}
+	if sandbox == nil {
+		return Result{}, errors.New("no build backend configured (Docker or Jenkins)")
 	}
 
 	fetchFn := x.fetch
@@ -161,7 +192,7 @@ func (x *Executor) build(ctx context.Context, c platform.Client, repo platform.R
 	if err := pinPolicy(dir, policy); err != nil {
 		return Result{}, err
 	}
-	return x.Sandbox.Run(ctx, dir, env)
+	return sandbox.Run(ctx, dir, env)
 }
 
 // defaultPolicy returns .repoguard.yml from the default branch (nil if absent).

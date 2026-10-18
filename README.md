@@ -44,6 +44,7 @@ comment and inline review comments.
 | **Issue lifecycle** | Marks and closes stale issues; flags high-priority issues nobody picked up | Service (periodic sweep) |
 | **Issue ↔ PR links** | Requires a linked issue, notes the PR on the issue, closes it on merge | Service |
 | **Executor** | Builds merge requests itself, in a sandbox or on Jenkins, when a project has no working CI | Service + Docker/Jenkins |
+| **Web console** | Connect GitLab/GitHub, choose projects, turn CI builds on and follow recent activity in the browser. Polling mode needs no public URL | Service |
 
 ## How it works
 
@@ -101,16 +102,25 @@ This prints a Markdown report and writes `repoguard-report.md` and `repoguard-ju
 Add `--json report.json` for machine-readable output, `--base origin/main` to check only the
 projects a branch changed, and `--no-vuln` to skip the dependency scan.
 
-### Run the service
+### Run the service and set it up in the browser
 
 ```bash
-cp deploy/.env.example deploy/.env      # fill in tokens and webhook secrets
-docker compose -f deploy/docker-compose.yml up -d
+docker compose -f deploy/docker-compose.executor.yml up -d     # or deploy/docker-compose.yml without CI builds
+docker compose -f deploy/docker-compose.executor.yml logs repoguard | grep "admin password"
 ```
 
-The service listens on `:8080`. Put it behind TLS and point webhooks at
-`/webhooks/github` or `/webhooks/gitlab`. To receive webhooks on a laptop, forward them with a
-tunnel such as [smee.io](https://smee.io) or `cloudflared`.
+Open **http://localhost:8080**, sign in, then:
+
+1. **Connections**: paste a GitLab URL and access token (or a GitHub token) and click *Save & test*.
+2. **Projects**: click *Start checking* next to a project and, if you want, turn on *CI builds*.
+3. Open or push to a merge request. Results appear on the merge request and under *Recent activity*.
+
+Without a public URL, repoguard **polls** GitLab/GitHub every 30 seconds, so this works on a
+laptop with no open ports. Set a public URL (behind TLS) and it creates **webhooks** instead, for
+instant reactions. Every setting can also come from environment variables, which take precedence
+over the UI (see [Configuration](#configuration)).
+
+![Overview page](docs/images/overview.png)
 
 ### Try everything at once
 
@@ -189,6 +199,9 @@ See [`.repoguard.example.yml`](.repoguard.example.yml) for every option with its
 | Variable | Default | Purpose |
 |---|---|---|
 | `REPOGUARD_ADDR` | `:8080` | Listen address |
+| `REPOGUARD_ADMIN_PASSWORD` | generated, printed in the log | Web console password |
+| `REPOGUARD_DATA_DIR` | `data` (`/data` in images) | Where settings entered in the web console are stored |
+| `REPOGUARD_POLL_INTERVAL` | `30s` | How often projects in polling mode are checked |
 | `REPOGUARD_WORKERS` / `REPOGUARD_QUEUE_SIZE` | `8` / `1000` | Worker pool and queue capacity |
 | `REPOGUARD_SWEEP_INTERVAL` | `6h` | Stale/SLA sweep interval (`0` disables; use `repoguard sweep` from cron) |
 | `REPOGUARD_PUBLIC_URL` | – | Link shown on commit statuses |
@@ -223,7 +236,8 @@ can build merge requests itself and post a **🧪 repoguard ci** comment with pe
 
 It is opt-in and fenced:
 
-- Nothing is built unless the repository matches `REPOGUARD_EXECUTOR_REPOS`.
+- Nothing is built unless *CI builds* is turned on for the project in the web console, or the
+  repository matches `REPOGUARD_EXECUTOR_REPOS`.
 - Only authors with Developer/write access are built; **forks never are**.
 - The policy comes from the default branch, never from the merge request.
 - Credentials stay out of the build: the token is used for `git fetch` on the host only.
@@ -232,7 +246,7 @@ It is opt-in and fenced:
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `REPOGUARD_EXECUTOR` | auto | `docker`, `jenkins` or `off`. Auto uses Docker when it is available |
+| `REPOGUARD_EXECUTOR` | auto | `docker`, `jenkins` or `off`. Auto follows the web console's choice, Docker by default |
 | `REPOGUARD_EXECUTOR_REPOS` | – | Comma-separated repository globs allowed to build, e.g. `team/*` |
 | `REPOGUARD_EXECUTOR_IMAGE` | `ghcr.io/dpvinh30092005/repoguard-ci:1` | Build image (Go, Node, Python, Newman, sonar-scanner, osv-scanner) |
 | `REPOGUARD_EXECUTOR_CPUS` / `_MEMORY` / `_PIDS_LIMIT` | `2` / `4g` / `1024` | Per-build limits |
@@ -265,6 +279,8 @@ To build the image locally instead of pulling it, run
 - Pull request content sent to the model is marked as untrusted data, which guards against
   prompt injection. Team instructions come only from the default-branch policy.
 - The service never runs repository code; the executor is opt-in and sandboxed (see above).
+- The web console uses one admin password, HMAC-signed session cookies and same-origin checks
+  on every change. Tokens are stored in a `0600` file and never shown back in the UI.
 - Idempotent writes and content fingerprints make sure retries and repeated pushes never
   post duplicate comments.
 
@@ -280,6 +296,7 @@ internal/
   triage/               issue assessment, duplicates (TF-IDF), stale, SLA, issue references
   ci/                   `repoguard ci`: project detection, stages, Postman, Sonar, reports
   executor/             sandboxed and Jenkins builds for repositories without CI
+  web/ store/ poller/   web console, saved settings, change detection without webhooks
   queue/ server/ config/ diff/ glob/ metrics/
 ci-templates/           drop-in CI for GitHub, GitLab and Jenkins
 deploy/                 Dockerfiles, compose files, demo stack (SonarQube + Jenkins)
@@ -308,8 +325,6 @@ sandbox, a real SonarQube analysis, and a real Jenkins build of
 
 ## Roadmap
 
-- **Web admin UI** *(in progress)*: connect GitLab/GitHub, choose repositories and switch
-  on the executor from the browser, with a polling mode that needs no public URL.
 - **High availability:** the job queue is in-memory, so run one replica for now. Moving it to
   Redis/NATS/SQS behind the same interface enables multiple replicas.
 - **CI results in the summary comment:** have `repoguard ci` report back to the service with

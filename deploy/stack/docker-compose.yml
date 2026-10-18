@@ -17,7 +17,9 @@ services:
     build:
       context: ../..
       dockerfile: deploy/executor.Dockerfile
-    env_file: .env
+    env_file:
+      - path: .env
+        required: false
     environment:
       REPOGUARD_EXECUTOR: ${REPOGUARD_EXECUTOR:-jenkins}
       JENKINS_URL: http://jenkins:8080

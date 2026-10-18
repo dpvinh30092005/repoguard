@@ -1,12 +1,21 @@
-# Local / single-host deployment. Expose port 8080 behind TLS (Caddy, nginx, a cloud LB).
+# Single-host deployment. Open http://localhost:8080 and sign in with the
+# password printed in the logs (`docker compose logs repoguard | grep "admin password"`).
+# For webhooks, expose port 8080 behind TLS (Caddy, nginx, a cloud load balancer).
 services:
   repoguard:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
-    env_file: .env
+    env_file:
+      - path: .env        # optional: everything can also be set in the web UI
+        required: false
     ports:
       - "8080:8080"
+    volumes:
+      - repoguard-data:/data
     restart: unless-stopped
     read_only: true
     # Probes: GET /healthz (liveness), /readyz (queue not saturated), /metrics (Prometheus).
+
+volumes:
+  repoguard-data:

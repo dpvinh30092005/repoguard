@@ -69,9 +69,10 @@ func (e *Engine) Handle(ctx context.Context, ev platform.Event) error {
 	log := e.Log.With("repo", ev.Repo.String(), "event", ev.Type, "number", ev.Number, "delivery", ev.DeliveryID)
 	start := e.Now()
 	var err error
+	var out outcome
 	switch ev.Type {
 	case platform.EventCROpened, platform.EventCRUpdated:
-		err = e.handleChangeRequest(ctx, c, ev)
+		err = e.handleChangeRequest(ctx, c, ev, &out)
 	case platform.EventCRMerged:
 		err = e.handleMerged(ctx, c, ev)
 	case platform.EventIssueOpened, platform.EventIssueEdited:
@@ -87,11 +88,20 @@ func (e *Engine) Handle(ctx context.Context, ev platform.Event) error {
 	}
 	e.Metrics.Inc("repoguard_events_total", "platform", string(ev.Repo.Platform), "type", string(ev.Type), "result", result)
 	log.Info("event handled", "result", result, "took", e.Now().Sub(start).Round(time.Millisecond), "err", err)
-	e.record(c, ev, result, err)
+	if err == nil && out.result != "" {
+		result = out.result
+	}
+	e.record(c, ev, result, out.detail, err)
 	return err
 }
 
-func (e *Engine) record(c platform.Client, ev platform.Event, result string, err error) {
+// outcome is what a change request's checks concluded, for the activity log.
+type outcome struct {
+	result string // passed | failed | skipped
+	detail string
+}
+
+func (e *Engine) record(c platform.Client, ev platform.Event, result, detail string, err error) {
 	if e.Activity == nil {
 		return
 	}
@@ -102,7 +112,7 @@ func (e *Engine) record(c platform.Client, ev platform.Event, result string, err
 	}
 	entry := activity.Entry{
 		Platform: string(ev.Repo.Platform), Repo: ev.Repo.FullName, Kind: kind, Number: ev.Number,
-		Event: string(ev.Type), Result: result, URL: c.WebURL(ev.Repo, target),
+		Event: string(ev.Type), Result: result, Detail: detail, URL: c.WebURL(ev.Repo, target),
 	}
 	if err != nil {
 		entry.Detail = firstLine(err.Error())
@@ -135,13 +145,14 @@ func (e *Engine) loadConfig(ctx context.Context, c platform.Client, repo platfor
 // Change requests
 // ---------------------------------------------------------------------------
 
-func (e *Engine) handleChangeRequest(ctx context.Context, c platform.Client, ev platform.Event) error {
+func (e *Engine) handleChangeRequest(ctx context.Context, c platform.Client, ev platform.Event, out *outcome) error {
 	repo := ev.Repo
 	cr, err := c.GetChangeRequest(ctx, repo, ev.Number) // fresh state, not the payload
 	if err != nil {
 		return err
 	}
 	if cr.State != "open" {
+		*out = outcome{"skipped", "no longer open"}
 		return nil
 	}
 	cfg, cfgWarning, err := e.loadConfig(ctx, c, repo)
@@ -149,6 +160,7 @@ func (e *Engine) handleChangeRequest(ctx context.Context, c platform.Client, ev 
 		return err
 	}
 	if cr.Draft && cfg.PullRequest.SkipDrafts {
+		*out = outcome{"skipped", "draft"}
 		return nil
 	}
 	if e.Executor != nil && ev.CodeChanged && e.Executor.Allowed(repo) {
@@ -180,6 +192,7 @@ func (e *Engine) handleChangeRequest(ctx context.Context, c platform.Client, ev 
 	}
 
 	results := e.runChecks(ctx, selected, checks.Input{Repo: repo, CR: cr, Files: files, Config: cfg})
+	*out = summarize(results)
 
 	// Idempotent writes first (statuses, sticky comment), the non-idempotent
 	// inline review last, so a retry after a partial failure can't double-post.
@@ -209,6 +222,20 @@ func (e *Engine) setStatus(ctx context.Context, c platform.Client, repo platform
 		return nil
 	}
 	return err
+}
+
+// summarize turns check results into one activity line: the failing checks, or a pass count.
+func summarize(results []checks.Result) outcome {
+	var failing []string
+	for _, r := range results {
+		if r.State == platform.StateFailure || r.State == platform.StateError {
+			failing = append(failing, r.Check+": "+r.Summary)
+		}
+	}
+	if len(failing) > 0 {
+		return outcome{"failed", strings.Join(failing, " · ")}
+	}
+	return outcome{"passed", fmt.Sprintf("%d check(s) passed", len(results))}
 }
 
 func (e *Engine) runChecks(ctx context.Context, cks []checks.Check, in checks.Input) []checks.Result {

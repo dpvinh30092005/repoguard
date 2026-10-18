@@ -13,6 +13,8 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=${VERSION}"
 FROM docker:27-cli
 RUN apk add --no-cache git ca-certificates
 COPY --from=build /out/repoguard /usr/local/bin/repoguard
+RUN mkdir -p /data
+ENV REPOGUARD_DATA_DIR=/data
 EXPOSE 8080
 ENTRYPOINT ["repoguard"]
 CMD ["serve"]

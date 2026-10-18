@@ -1,60 +1,60 @@
 {{define "content"}}
-<h1>Dự án</h1>
-<p class="lead">Bật kiểm tra cho dự án nào thì repoguard sẽ xem MR và issue của dự án đó.
-{{if .PublicURL}}Dùng webhook tới <code>{{.PublicURL}}</code>.{{else}}Chế độ hiện tại: tự hỏi định kỳ mỗi 30 giây (không cần webhook).{{end}}</p>
+<h1>Projects</h1>
+<p class="lead">repoguard checks the merge requests and issues of every project you start checking.
+{{if .PublicURL}}Events arrive by webhook at <code>{{.PublicURL}}</code>.{{else}}Current mode: polling every 30 seconds (no webhook needed).{{end}}</p>
 
 {{if not .Groups}}
-<div class="card"><p>Chưa kết nối GitLab hay GitHub. <a href="/connect">Kết nối ngay →</a></p></div>
+<div class="card"><p>Neither GitLab nor GitHub is connected yet. <a href="/connect">Connect now →</a></p></div>
 {{else}}
 <form class="row" method="get" action="/repos" style="margin-bottom:16px">
-  <input type="search" name="q" value="{{.Q}}" placeholder="Tìm dự án theo tên..." style="max-width:360px">
-  <button class="ghost" type="submit">Tìm</button>
+  <input type="search" name="q" value="{{.Q}}" placeholder="Filter projects by name..." style="max-width:360px">
+  <button class="ghost" type="submit">Filter</button>
 </form>
 {{end}}
 
 {{range .Groups}}
 <div class="card">
-  <h2>{{if eq (printf "%s" .Kind) "gitlab"}}GitLab{{else}}GitHub{{end}} <span class="muted">· {{.Total}} dự án bạn có quyền</span></h2>
-  {{if .Err}}<div class="flash err">Không tải được danh sách: {{.Err}}</div>{{end}}
+  <h2>{{if eq (printf "%s" .Kind) "gitlab"}}GitLab{{else}}GitHub{{end}} <span class="muted">· {{.Total}} project(s) you can access</span></h2>
+  {{if .Err}}<div class="flash err">Could not load the project list: {{.Err}}</div>{{end}}
   {{if .Rows}}
   <div class="scroll"><table>
-    <tr><th>Dự án</th><th>Trạng thái</th><th>Tự chạy CI</th><th></th></tr>
+    <tr><th>Project</th><th>Status</th><th>CI builds</th><th></th></tr>
     {{range .Rows}}
     <tr>
       <td><b>{{.Repo.FullName}}</b></td>
       <td>
         {{if .Watched}}
-          <span class="badge b-ok">Đang kiểm tra</span>
-          <span class="hint">{{if eq .Watched.Mode "webhook"}}webhook{{else}}hỏi mỗi 30s{{end}}</span>
-        {{else}}<span class="badge b-mute">Tắt</span>{{end}}
+          <span class="badge b-ok">Checking</span>
+          <span class="hint">{{if eq .Watched.Mode "webhook"}}webhook{{else}}polling every 30s{{end}}</span>
+        {{else}}<span class="badge b-mute">Off</span>{{end}}
       </td>
       <td>
         {{if .Watched}}
-          {{if $.ExecutorAvailable}}
+          {{if $.Ex.Available}}
           <form class="inline" method="post" action="/repos/executor">
             {{template "repofields" .Repo}}
-            {{if .Watched.Executor}}<button class="small" type="submit" title="Bấm để tắt">✓ Đang bật</button>
-            {{else}}<button class="ghost small" type="submit">Bật</button>{{end}}
+            {{if .Watched.Executor}}<button class="small" type="submit" title="Click to turn off">✓ On</button>
+            {{else}}<button class="ghost small" type="submit">Turn on</button>{{end}}
           </form>
-          {{else}}<span class="muted" title="{{$.ExecutorReason}}">không khả dụng</span>{{end}}
+          {{else}}<span class="muted" title="{{$.Ex.Reason}}">unavailable</span>{{end}}
         {{else}}<span class="muted">–</span>{{end}}
       </td>
       <td style="text-align:right;white-space:nowrap">
         {{if .Watched}}
-          <form class="inline" method="post" action="/repos/check">{{template "repofields" .Repo}}<button class="ghost small" type="submit">Kiểm tra ngay</button></form>
-          <form class="inline" method="post" action="/repos/unwatch">{{template "repofields" .Repo}}<button class="danger small" type="submit">Tắt</button></form>
+          <form class="inline" method="post" action="/repos/check">{{template "repofields" .Repo}}<button class="ghost small" type="submit">Check now</button></form>
+          <form class="inline" method="post" action="/repos/unwatch">{{template "repofields" .Repo}}<button class="danger small" type="submit">Stop</button></form>
         {{else}}
-          <form class="inline" method="post" action="/repos/watch">{{template "repofields" .Repo}}<button class="small" type="submit">Bật kiểm tra</button></form>
+          <form class="inline" method="post" action="/repos/watch">{{template "repofields" .Repo}}<button class="small" type="submit">Start checking</button></form>
         {{end}}
       </td>
     </tr>
     {{end}}
   </table></div>
-  {{else if not .Err}}<p class="muted">Không có dự án nào khớp.</p>{{end}}
+  {{else if not .Err}}<p class="muted">No matching projects.</p>{{end}}
 </div>
 {{end}}
 
-{{if not .ExecutorAvailable}}<p class="hint">“Tự chạy CI” không khả dụng: {{.ExecutorReason}}</p>{{end}}
+{{if not .Ex.Available}}<p class="hint">CI builds are unavailable: {{.Ex.Reason}} (<a href="/connect">configure</a>)</p>{{end}}
 {{end}}
 
 {{define "repofields"}}

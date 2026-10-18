@@ -59,6 +59,11 @@ func ScanLine(text string) []Match {
 	}
 	var out []Match
 	for _, r := range rules {
+		// The generic rule is a fallback: a line already flagged by a specific
+		// rule (e.g. `apiKey = "AKIA..."`) is one secret, not two.
+		if r.minEntropy > 0 && len(out) > 0 {
+			continue
+		}
 		for _, m := range r.re.FindAllStringSubmatch(text, -1) {
 			secret := m[r.group]
 			if r.minEntropy > 0 && (entropy(secret) < r.minEntropy || placeholder.MatchString(secret)) {

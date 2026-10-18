@@ -105,6 +105,9 @@ func (q *Queue) Enqueue(job Job) error {
 	}
 }
 
+// Depth is the number of jobs waiting to run.
+func (q *Queue) Depth() int { return len(q.jobs) }
+
 // Saturated reports whether the queue is over 90% full (used by /readyz).
 func (q *Queue) Saturated() bool { return len(q.jobs) > cap(q.jobs)*9/10 }
 

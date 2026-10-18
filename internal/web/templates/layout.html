@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="vi">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -59,12 +59,12 @@ footer{color:var(--muted);font-size:12.5px;text-align:center;padding:16px}
 <header><div class="wrap top">
   <a class="brand" href="/">🛡️ repoguard</a>
   <nav>
-    <a href="/" {{if eq .Page "overview"}}class="on"{{end}}>Tổng quan</a>
-    <a href="/connect" {{if eq .Page "connect"}}class="on"{{end}}>Kết nối</a>
-    <a href="/repos" {{if eq .Page "repos"}}class="on"{{end}}>Dự án</a>
-    <a href="/guide" {{if eq .Page "guide"}}class="on"{{end}}>Hướng dẫn</a>
+    <a href="/" {{if eq .Page "overview"}}class="on"{{end}}>Overview</a>
+    <a href="/connect" {{if eq .Page "connect"}}class="on"{{end}}>Connections</a>
+    <a href="/repos" {{if eq .Page "repos"}}class="on"{{end}}>Projects</a>
+    <a href="/guide" {{if eq .Page "guide"}}class="on"{{end}}>Guide</a>
   </nav>
-  <form class="inline" method="post" action="/logout"><button class="ghost small" type="submit">Đăng xuất</button></form>
+  <form class="inline" method="post" action="/logout"><button class="ghost small" type="submit">Sign out</button></form>
 </div></header>
 {{end}}
 <main><div class="wrap">

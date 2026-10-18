@@ -1,40 +1,40 @@
 {{define "content"}}
-<h1>Hướng dẫn</h1>
-<p class="lead">repoguard làm gì và thử nó thế nào.</p>
+<h1>Guide</h1>
+<p class="lead">What repoguard does and how to try it.</p>
 
 <div class="card">
-  <h2>repoguard làm gì?</h2>
-  <p>Mỗi khi có <b>Merge Request</b> (MR) mới hoặc commit mới trong MR, repoguard sẽ:</p>
+  <h2>What does repoguard do?</h2>
+  <p>Whenever a <b>merge request</b> (MR) is opened or gets new commits, repoguard:</p>
   <ul>
-    <li><b>Kiểm tra quy tắc MR</b>: tiêu đề đúng chuẩn (vd. <code>feat: thêm đăng nhập</code>), có mô tả, có link issue.</li>
-    <li><b>Quét secret</b>: phát hiện mật khẩu, token lỡ commit vào code.</li>
-    <li><b>AI review</b> (nếu có Anthropic key): góp ý trên từng dòng code.</li>
-    <li><b>Tự chạy CI</b> (nếu bật): build và chạy test trong container cách ly, dành cho dự án đã tắt pipeline trên GitLab.</li>
+    <li><b>Checks MR conventions</b>: a conventional title (e.g. <code>feat: add login</code>), a description and a linked issue.</li>
+    <li><b>Scans for secrets</b>: passwords and tokens committed by mistake.</li>
+    <li><b>AI review</b> (with an Anthropic key): inline comments on the changed code.</li>
+    <li><b>CI builds</b> (if turned on): builds and tests the code in an isolated container or on Jenkins, for projects whose own pipelines are disabled.</li>
   </ul>
-  <p>Với <b>issue</b>: hỏi lại khi thiếu thông tin, tự gắn label, phát hiện trùng lặp.</p>
-  <p>Kết quả hiện thành <b>comment trên MR</b> và ở trang Tổng quan.</p>
+  <p>For <b>issues</b> it asks for missing details, adds labels and flags likely duplicates.</p>
+  <p>Results appear as <b>comments on the merge request</b> and on the Overview page.</p>
 </div>
 
 <div class="card">
-  <h2>Thử trong 5 phút</h2>
+  <h2>Try it in 5 minutes</h2>
   <ol class="steps">
-    <li><a href="/connect">Kết nối</a> GitLab: dán token có quyền <code>api</code>, bấm “Lưu &amp; kiểm tra”.</li>
-    <li>Vào <a href="/repos">Dự án</a>, chọn một dự án thử và bấm <b>Bật kiểm tra</b>. Muốn thử tự chạy CI thì bấm thêm <b>Bật</b> ở cột “Tự chạy CI”.</li>
-    <li>Trên GitLab, tạo một nhánh, sửa một file rồi mở <b>Merge Request</b> với tiêu đề tuỳ ý, ví dụ “update stuff”.</li>
-    <li>Đợi khoảng 30 giây (repoguard hỏi GitLab mỗi 30 giây), rồi xem MR: sẽ có comment <b>🛡️ repoguard</b> báo tiêu đề sai chuẩn, thiếu mô tả. Nếu bật tự chạy CI, vài phút sau có thêm comment <b>🧪 repoguard ci</b> với kết quả build và test.</li>
-    <li>Sửa tiêu đề thành <code>feat: thử repoguard</code> và thêm mô tả. Comment sẽ tự cập nhật thành ✅.</li>
+    <li><a href="/connect">Connect</a> GitLab: paste a token with the <code>api</code> scope and click “Save &amp; test”.</li>
+    <li>On <a href="/repos">Projects</a>, pick a test project and click <b>Start checking</b>. To try CI builds too, click <b>Turn on</b> in the “CI builds” column.</li>
+    <li>In GitLab, create a branch, change a file and open a <b>merge request</b> with any title, for example “update stuff”.</li>
+    <li>Wait about 30 seconds (repoguard polls GitLab every 30 seconds), then look at the merge request: a <b>🛡️ repoguard</b> comment reports the non-conventional title and the missing description. With CI builds on, a <b>🧪 repoguard ci</b> comment with build and test results follows a few minutes later.</li>
+    <li>Rename the MR to <code>feat: try repoguard</code> and add a description. The comment updates itself to ✅.</li>
   </ol>
-  <p class="hint">Có MR sẵn rồi? Bấm <b>Kiểm tra ngay</b> ở trang Dự án để kiểm tra tất cả MR đang mở.</p>
+  <p class="hint">Already have open merge requests? Click <b>Check now</b> on the Projects page to check all of them.</p>
 </div>
 
 <div class="card">
-  <h2>Không thấy kết quả?</h2>
+  <h2>Nothing happening?</h2>
   <div class="scroll"><table>
-    <tr><th>Hiện tượng</th><th>Cách xử lý</th></tr>
-    <tr><td>Trang Tổng quan báo “Lỗi” ở GitLab</td><td>Token sai hoặc thiếu quyền <code>api</code>. Tạo token mới ở trang <a href="/connect">Kết nối</a>.</td></tr>
-    <tr><td>MR mở rồi mà không có gì</td><td>Đợi 30 giây rồi tải lại trang. Hoặc bấm “Kiểm tra ngay”. Bảng “Hoạt động gần đây” sẽ ghi lỗi nếu có.</td></tr>
-    <tr><td>Có comment 🛡️ nhưng không có 🧪</td><td>Chưa bật “Tự chạy CI” cho dự án, hoặc trang Tổng quan báo “Thiếu image”: làm theo lệnh hiển thị ở đó.</td></tr>
-    <tr><td>Comment 🧪 báo “Not built automatically”</td><td>MR từ fork, hoặc người mở MR không có quyền Developer. Đây là hàng rào an toàn, không phải lỗi.</td></tr>
+    <tr><th>Symptom</th><th>What to do</th></tr>
+    <tr><td>The Overview page shows “Error” for GitLab</td><td>The token is wrong or lacks the <code>api</code> scope. Create a new one on the <a href="/connect">Connections</a> page.</td></tr>
+    <tr><td>An MR is open but nothing shows up</td><td>Wait 30 seconds and reload, or click “Check now”. The “Recent activity” table shows any error.</td></tr>
+    <tr><td>There is a 🛡️ comment but no 🧪 one</td><td>CI builds are not turned on for the project, or the Overview page says “Image missing”: run the command shown there.</td></tr>
+    <tr><td>The 🧪 comment says “Not built automatically”</td><td>The MR comes from a fork, or its author lacks Developer access. That is a safety rule, not a bug.</td></tr>
   </table></div>
 </div>
 {{end}}
