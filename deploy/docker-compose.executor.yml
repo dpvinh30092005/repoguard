@@ -1,0 +1,18 @@
+# Executor mode: repoguard builds merge requests itself when GitLab pipelines are disabled.
+#   docker compose -f deploy/docker-compose.executor.yml up -d
+# SECURITY: mounting the Docker socket gives this container root on the host.
+# Use a dedicated VM for it, keep REPOGUARD_EXECUTOR_REPOS tight, and prefer
+# REPOGUARD_EXECUTOR_RUNTIME=runsc (gVisor) if it is installed on the host.
+services:
+  repoguard:
+    build:
+      context: ..
+      dockerfile: deploy/executor.Dockerfile
+    env_file: .env
+    environment:
+      REPOGUARD_EXECUTOR: docker
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock

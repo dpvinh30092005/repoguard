@@ -46,6 +46,8 @@ type ChangeRequest struct {
 	HeadRef  string
 	BaseRef  string
 	Labels   []string
+	AuthorID int64 // GitLab user id (membership lookups)
+	FromFork bool  // head lives in another repository
 }
 
 type Issue struct {
@@ -146,6 +148,19 @@ type Client interface {
 	// ListOpenIssues returns up to limit open issues (not PRs), most recently updated first.
 	ListOpenIssues(ctx context.Context, repo Repo, limit int) ([]Issue, error)
 	CloseIssue(ctx context.Context, repo Repo, number int, reason CloseReason) error
+	// AuthorCanPush reports whether the change request's author has write
+	// (GitHub) / Developer (GitLab) access — i.e. could already run code in CI.
+	AuthorCanPush(ctx context.Context, repo Repo, cr *ChangeRequest) (bool, error)
+	// GitSource returns what is needed to fetch the change request's head commit.
+	GitSource(ctx context.Context, repo Repo, cr *ChangeRequest) (GitSource, error)
+}
+
+// GitSource describes how to fetch a change request over HTTPS.
+type GitSource struct {
+	URL      string // https clone URL, without credentials
+	Username string
+	Password string // short-lived/bot token; never put it in a URL or argv
+	Ref      string // e.g. refs/pull/7/head, refs/merge-requests/7/head
 }
 
 var ErrNotFound = errors.New("not found")
@@ -191,4 +206,10 @@ func containsFold(list []string, s string) bool {
 		}
 	}
 	return false
+}
+
+// IsForbidden reports a 403, e.g. GitLab refusing commit statuses when CI/CD is disabled.
+func IsForbidden(err error) bool {
+	var apiErr *APIError
+	return errors.As(err, &apiErr) && apiErr.Status == 403
 }

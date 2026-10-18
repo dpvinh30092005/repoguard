@@ -174,3 +174,26 @@ func TestNotFoundAndRetryable(t *testing.T) {
 		t.Errorf("502 should be retryable: %v", err)
 	}
 }
+
+func TestAuthorCanPushAndForks(t *testing.T) {
+	api := platformtest.New(t).
+		On("GET", "/repos/acme/api/collaborators/ann/permission", 200, `{"permission":"write"}`).
+		On("GET", "/repos/acme/api/collaborators/eve/permission", 200, `{"permission":"read"}`).
+		On("GET", "/repos/acme/api/pulls/3", 200, `{"number":3,"state":"open","head":{"repo":{"full_name":"eve/api"}},"base":{"repo":{"full_name":"acme/api"}}}`)
+	c := New(api.URL, nil, "tok", http.DefaultClient)
+	repo := platform.Repo{ID: "acme/api"}
+	for user, want := range map[string]bool{"ann": true, "eve": false, "nobody": false} {
+		got, err := c.AuthorCanPush(context.Background(), repo, &platform.ChangeRequest{Author: user})
+		if err != nil || got != want {
+			t.Errorf("%s: got %v err %v", user, got, err)
+		}
+	}
+	cr, err := c.GetChangeRequest(context.Background(), repo, 3)
+	if err != nil || !cr.FromFork {
+		t.Fatalf("fork not detected: %+v %v", cr, err)
+	}
+	src, _ := c.GitSource(context.Background(), repo, cr)
+	if src.Ref != "refs/pull/3/head" || src.Username != "x-access-token" || src.Password != "tok" {
+		t.Fatalf("src = %+v", src)
+	}
+}

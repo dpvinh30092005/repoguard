@@ -16,10 +16,27 @@ type Service struct {
 	SweepInterval time.Duration // 0 disables the stale/SLA sweeper
 	PublicURL     string        // optional link shown on commit statuses
 
-	GitHub GitHub
-	GitLab GitLab
-	AI     AI
+	GitHub   GitHub
+	GitLab   GitLab
+	AI       AI
+	Executor Executor
 }
+
+// Executor runs `repoguard ci` for repos whose own CI is unavailable. Off by default.
+type Executor struct {
+	Mode        string   // "" (off) | "docker"
+	Repos       []string // required allow-list of repo globs, e.g. "team/*"
+	Image       string
+	CPUs        string
+	Memory      string
+	PidsLimit   int
+	Network     string
+	Runtime     string // optional container runtime, e.g. runsc (gVisor)
+	Timeout     time.Duration
+	Concurrency int
+}
+
+func (e Executor) Enabled() bool { return e.Mode == "docker" }
 
 type GitHub struct {
 	APIURL        string // https://api.github.com or https://ghe.example.com/api/v3
@@ -93,10 +110,47 @@ func LoadService() (Service, error) {
 	if s.GitHub.AppID != 0 && len(s.GitHub.PrivateKeyPEM) == 0 {
 		return s, fmt.Errorf("GITHUB_APP_ID is set but no GITHUB_APP_PRIVATE_KEY(_FILE)")
 	}
+	if err := loadExecutor(&s.Executor); err != nil {
+		return s, err
+	}
 	if !s.GitHub.Enabled() && !s.GitLab.Enabled() {
 		return s, fmt.Errorf("no platform configured: set GITHUB_WEBHOOK_SECRET + (GITHUB_APP_ID or GITHUB_TOKEN), and/or GITLAB_TOKEN + GITLAB_WEBHOOK_SECRET")
 	}
 	return s, nil
+}
+
+func loadExecutor(x *Executor) error {
+	*x = Executor{
+		Mode:    os.Getenv("REPOGUARD_EXECUTOR"),
+		Image:   env("REPOGUARD_EXECUTOR_IMAGE", "ghcr.io/dpvinh30092005/repoguard-ci:1"),
+		CPUs:    env("REPOGUARD_EXECUTOR_CPUS", "2"),
+		Memory:  env("REPOGUARD_EXECUTOR_MEMORY", "4g"),
+		Network: env("REPOGUARD_EXECUTOR_NETWORK", "bridge"),
+		Runtime: os.Getenv("REPOGUARD_EXECUTOR_RUNTIME"),
+	}
+	for _, r := range strings.Split(os.Getenv("REPOGUARD_EXECUTOR_REPOS"), ",") {
+		if r = strings.TrimSpace(r); r != "" {
+			x.Repos = append(x.Repos, r)
+		}
+	}
+	var err error
+	if x.Timeout, err = time.ParseDuration(env("REPOGUARD_EXECUTOR_TIMEOUT", "20m")); err != nil {
+		return fmt.Errorf("REPOGUARD_EXECUTOR_TIMEOUT: %w", err)
+	}
+	if x.Concurrency, err = envInt("REPOGUARD_EXECUTOR_CONCURRENCY", 2); err != nil {
+		return err
+	}
+	if x.PidsLimit, err = envInt("REPOGUARD_EXECUTOR_PIDS_LIMIT", 1024); err != nil {
+		return err
+	}
+	switch {
+	case x.Mode != "" && x.Mode != "docker":
+		return fmt.Errorf("REPOGUARD_EXECUTOR must be empty or \"docker\", got %q", x.Mode)
+	case x.Enabled() && len(x.Repos) == 0:
+		// Fail closed: never build arbitrary repositories just because the switch was flipped.
+		return fmt.Errorf("REPOGUARD_EXECUTOR=docker requires REPOGUARD_EXECUTOR_REPOS (comma-separated globs, e.g. \"team/*,org/app\")")
+	}
+	return nil
 }
 
 func env(key, fallback string) string {

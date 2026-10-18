@@ -82,12 +82,14 @@ type ghPull struct {
 	User    ghUser    `json:"user"`
 	Labels  []ghLabel `json:"labels"`
 	Head    struct {
-		SHA string `json:"sha"`
-		Ref string `json:"ref"`
+		SHA  string  `json:"sha"`
+		Ref  string  `json:"ref"`
+		Repo *ghRepo `json:"repo"`
 	} `json:"head"`
 	Base struct {
-		SHA string `json:"sha"`
-		Ref string `json:"ref"`
+		SHA  string  `json:"sha"`
+		Ref  string  `json:"ref"`
+		Repo *ghRepo `json:"repo"`
 	} `json:"base"`
 }
 
@@ -100,6 +102,8 @@ func (p ghPull) toCR() *platform.ChangeRequest {
 		Number: p.Number, Title: p.Title, Body: p.Body, Author: p.User.Login, URL: p.HTMLURL,
 		Draft: p.Draft, State: state, HeadSHA: p.Head.SHA, BaseSHA: p.Base.SHA,
 		HeadRef: p.Head.Ref, BaseRef: p.Base.Ref, Labels: labelNames(p.Labels),
+		// A deleted fork has head.repo == null: treat it as a fork.
+		FromFork: p.Head.Repo == nil || p.Base.Repo == nil || p.Head.Repo.FullName != p.Base.Repo.FullName,
 	}
 }
 
@@ -359,6 +363,41 @@ func (c *Client) CloseIssue(ctx context.Context, repo platform.Repo, number int,
 	body := map[string]string{"state": "closed", "state_reason": string(reason)}
 	_, err := c.rest.Do(with(ctx, repo), http.MethodPatch, fmt.Sprintf("%s/issues/%d", repoPath(repo), number), body, nil)
 	return err
+}
+
+func (c *Client) AuthorCanPush(ctx context.Context, repo platform.Repo, cr *platform.ChangeRequest) (bool, error) {
+	var resp struct {
+		Permission string `json:"permission"` // admin | maintain | write | triage | read | none
+	}
+	p := fmt.Sprintf("%s/collaborators/%s/permission", repoPath(repo), url.PathEscape(cr.Author))
+	if _, err := c.rest.Do(with(ctx, repo), http.MethodGet, p, nil, &resp); err != nil {
+		if platformNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	switch resp.Permission {
+	case "admin", "maintain", "write":
+		return true, nil
+	}
+	return false, nil
+}
+
+func (c *Client) GitSource(ctx context.Context, repo platform.Repo, cr *platform.ChangeRequest) (platform.GitSource, error) {
+	tok, err := c.tokens.Token(ctx, repo.InstallationID)
+	if err != nil {
+		return platform.GitSource{}, err
+	}
+	web := "https://github.com"
+	if base := c.rest.BaseURL; base != "https://api.github.com" {
+		web = strings.TrimSuffix(base, "/api/v3") // GitHub Enterprise Server
+	}
+	return platform.GitSource{
+		URL:      web + "/" + repo.ID + ".git",
+		Username: "x-access-token",
+		Password: tok,
+		Ref:      fmt.Sprintf("refs/pull/%d/head", cr.Number),
+	}, nil
 }
 
 func escapePath(p string) string {

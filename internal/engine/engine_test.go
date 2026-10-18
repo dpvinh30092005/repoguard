@@ -121,6 +121,13 @@ func (f *fakeClient) CloseIssue(_ context.Context, _ platform.Repo, n int, r pla
 	return nil
 }
 
+func (f *fakeClient) AuthorCanPush(context.Context, platform.Repo, *platform.ChangeRequest) (bool, error) {
+	return true, nil
+}
+func (f *fakeClient) GitSource(context.Context, platform.Repo, *platform.ChangeRequest) (platform.GitSource, error) {
+	return platform.GitSource{}, nil
+}
+
 type stubReviewer struct{ calls int }
 
 func (s *stubReviewer) Review(context.Context, aireview.Request) (*aireview.Review, error) {
@@ -315,5 +322,49 @@ func TestSweepStaleAndSLA(t *testing.T) {
 	}
 	if c.issues[1].HasLabel("stale") {
 		t.Error("activity should un-stale the issue")
+	}
+}
+
+type recordingExecutor struct{ submitted []int }
+
+func (r *recordingExecutor) Allowed(repo platform.Repo) bool { return repo.FullName == "acme/api" }
+func (r *recordingExecutor) Submit(_ platform.Repo, cr *platform.ChangeRequest) error {
+	r.submitted = append(r.submitted, cr.Number)
+	return nil
+}
+
+func TestExecutorRunsOnlyOnNewCommits(t *testing.T) {
+	c := newFake()
+	c.crs[1] = &platform.ChangeRequest{Number: 1, Title: "feat: x", State: "open", HeadSHA: "a"}
+	e := newEngine(c, nil)
+	x := &recordingExecutor{}
+	e.Executor = x
+
+	_ = e.Handle(context.Background(), platform.Event{Type: platform.EventCROpened, Repo: testRepo, Number: 1, CodeChanged: true})
+	_ = e.Handle(context.Background(), platform.Event{Type: platform.EventCRUpdated, Repo: testRepo, Number: 1, CodeChanged: false})
+	other := testRepo
+	other.FullName = "acme/not-allowed"
+	_ = e.Handle(context.Background(), platform.Event{Type: platform.EventCROpened, Repo: other, Number: 1, CodeChanged: true})
+	if len(x.submitted) != 1 {
+		t.Fatalf("submitted = %v, want exactly one (new commits on an allowed repo)", x.submitted)
+	}
+}
+
+type forbiddingClient struct{ *fakeClient }
+
+func (f forbiddingClient) SetStatus(context.Context, platform.Repo, string, platform.Status) error {
+	return &platform.APIError{Status: 403, Body: "CI/CD disabled"}
+}
+
+func TestStatusForbiddenFallsBackToComment(t *testing.T) {
+	c := newFake()
+	c.crs[1] = &platform.ChangeRequest{Number: 1, Title: "bad title", State: "open", HeadSHA: "a"}
+	e := newEngine(c, nil)
+	e.Clients[platform.GitHub] = forbiddingClient{c}
+	if err := e.Handle(context.Background(), platform.Event{Type: platform.EventCROpened, Repo: testRepo, Number: 1, CodeChanged: true}); err != nil {
+		t.Fatalf("403 on statuses must not fail the job: %v", err)
+	}
+	if !strings.Contains(c.comments["change_request#1|"+markerSummary], "| `pr-rules` | ❌ failure") {
+		t.Error("results must still be posted in the summary comment")
 	}
 }

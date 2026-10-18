@@ -13,6 +13,7 @@ Repo nào "connect" (cài GitHub App / thêm webhook GitLab) là được kiểm
 | Issue | thiếu thông tin → hỏi lại + label `needs-info`; tự gắn label; phát hiện trùng lặp | Service |
 | Issue lifecycle | stale → nhắc → đóng; cảnh báo SLA cho bug P0 chưa ai nhận | Service (sweep định kỳ) |
 | Issue ↔ PR | PR phải link issue; comment lên issue khi có PR; merge xong tự đóng issue | Service |
+| **Executor** (tuỳ chọn) | repo **không có/không được chạy CI** (GitLab tắt pipeline): service tự build MR trong container cách ly | Service + Docker → [docs/executor.md](docs/executor.md) |
 
 ## Kiến trúc
 
@@ -76,13 +77,14 @@ internal/
   engine/                 event → check/triage → status/comment/label
   checks/                 pr-rules, secrets, aireview (Claude)
   triage/                 phân loại issue, section thiếu, trùng lặp TF-IDF, stale, SLA, issue refs
-  ci/                     `repoguard ci`: detect project, chạy stage, quét secret/CVE, report MD + JUnit
+  ci/                     `repoguard ci`: detect project, chạy stage, quét secret/CVE, report MD + JUnit + JSON
+  executor/               chạy `repoguard ci` trong sandbox Docker cho repo không có CI
   queue/ server/ config/ diff/ glob/ metrics/
 .github/workflows/
   repoguard-ci.yml        reusable workflow cho repo khác gọi
   ci.yml                  CI của chính repoguard (test, govulncheck, tự kiểm tra, build image)
 ci-templates/             file mẫu để repo khác dùng (GitHub + GitLab)
-deploy/                   Dockerfile service, Dockerfile CI runner, docker-compose, .env.example
+deploy/                   Dockerfile service / CI runner / executor, docker-compose, .env.example
 .repoguard.example.yml    toàn bộ cấu hình, có chú thích
 ```
 
@@ -157,7 +159,8 @@ thay vì trả lỗi. Bỏ tùy chọn này trong `internal/checks/aireview/clau
 - Secret bị phát hiện **không bao giờ in nguyên văn** (chỉ hiện 4 ký tự đầu), vì comment là công khai.
 - Nội dung PR đưa cho AI được đánh dấu là dữ liệu không tin cậy (chống prompt injection);
   hướng dẫn riêng của team chỉ lấy từ `.repoguard.yml` trên default branch.
-- Service không clone, không chạy code của repo.
+- Service không clone, không chạy code của repo, **trừ khi** bật executor cho các repo được liệt kê;
+  khi đó code chạy trong container dùng một lần, có giới hạn, không có credential (xem [docs/executor.md](docs/executor.md)).
 
 ## Giới hạn hiện tại & lộ trình
 

@@ -44,3 +44,27 @@ func TestEmptyFileIsDefault(t *testing.T) {
 		t.Fatalf("cfg=%+v err=%v", cfg.AIReview, err)
 	}
 }
+
+func TestExecutorConfigFailsClosed(t *testing.T) {
+	t.Setenv("GITLAB_TOKEN", "t")
+	t.Setenv("GITLAB_WEBHOOK_SECRET", "s")
+
+	t.Setenv("REPOGUARD_EXECUTOR", "docker")
+	if _, err := LoadService(); err == nil {
+		t.Fatal("enabling the executor without an allow-list must fail")
+	}
+
+	t.Setenv("REPOGUARD_EXECUTOR_REPOS", "team/*, org/app")
+	cfg, err := LoadService()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Executor.Enabled() || len(cfg.Executor.Repos) != 2 || cfg.Executor.Repos[1] != "org/app" || cfg.Executor.Memory != "4g" {
+		t.Fatalf("executor = %+v", cfg.Executor)
+	}
+
+	t.Setenv("REPOGUARD_EXECUTOR", "kubernetes")
+	if _, err := LoadService(); err == nil {
+		t.Fatal("unknown executor mode must fail")
+	}
+}

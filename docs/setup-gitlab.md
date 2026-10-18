@@ -44,6 +44,9 @@ Job dùng image `ghcr.io/<owner>/repoguard-ci` (Go + Node + Python + osv-scanner
 Nếu runner không ra được internet, build image từ `deploy/ci-runner.Dockerfile` và đẩy vào registry nội bộ,
 rồi đặt biến `REPOGUARD_IMAGE`.
 
+> **Project không chạy được pipeline** (CI/CD bị tắt, không có runner)? Bỏ qua bước 3 và bật
+> [executor](executor.md): repoguard sẽ tự build MR trong container cách ly.
+
 ## 4. Bắt buộc check
 
 Project → Settings → Merge requests → **Pipelines must succeed** để chặn merge khi job `repoguard` (CI) fail.

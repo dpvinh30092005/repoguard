@@ -32,22 +32,22 @@ var skipDirs = map[string]bool{
 }
 
 type Project struct {
-	Path     string // relative to the repo root, "." for root
-	Type     string
-	Commands map[string]string
+	Path     string            `json:"path"` // relative to the repo root, "." for root
+	Type     string            `json:"type"`
+	Commands map[string]string `json:"commands"`
 }
 
 type StageResult struct {
-	Stage    string
-	Command  string
-	Status   string // passed | failed | skipped
-	Duration time.Duration
-	Output   string // tail of the output, for failures
+	Stage    string        `json:"stage"`
+	Command  string        `json:"command"`
+	Status   string        `json:"status"` // passed | failed | skipped
+	Duration time.Duration `json:"duration_ns"`
+	Output   string        `json:"output,omitempty"` // tail of the output, for failures
 }
 
 type ProjectResult struct {
-	Project Project
-	Stages  []StageResult
+	Project Project       `json:"project"`
+	Stages  []StageResult `json:"stages"`
 }
 
 func (p ProjectResult) Failed() bool {
@@ -60,22 +60,43 @@ func (p ProjectResult) Failed() bool {
 }
 
 type SecretFinding struct {
-	Path, Rule, Masked string
-	Line               int
+	Path   string `json:"path"`
+	Line   int    `json:"line"`
+	Rule   string `json:"rule"`
+	Masked string `json:"masked"`
 }
 
 type VulnResult struct {
-	Ran   bool
-	Count int
-	Note  string
+	Ran   bool   `json:"ran"`
+	Count int    `json:"count"`
+	Note  string `json:"note,omitempty"`
 }
 
+// Report is also the JSON contract between `repoguard ci --json` and the executor.
 type Report struct {
-	Projects    []ProjectResult
-	Secrets     []SecretFinding
-	SecretsRan  bool
-	Vulns       VulnResult
-	FailOnVulns bool
+	Projects    []ProjectResult `json:"projects"`
+	Secrets     []SecretFinding `json:"secrets"`
+	SecretsRan  bool            `json:"secrets_ran"`
+	Vulns       VulnResult      `json:"vulns"`
+	FailOnVulns bool            `json:"fail_on_vulns"`
+}
+
+// Summary is a one-line result for a commit status (<= 140 chars).
+func (r Report) Summary() string {
+	failed := 0
+	for _, p := range r.Projects {
+		if p.Failed() {
+			failed++
+		}
+	}
+	s := fmt.Sprintf("%d project(s): %d passed, %d failed", len(r.Projects), len(r.Projects)-failed, failed)
+	if len(r.Secrets) > 0 {
+		s += fmt.Sprintf(", %d secret(s)", len(r.Secrets))
+	}
+	if r.Vulns.Count > 0 {
+		s += fmt.Sprintf(", %d vuln(s)", r.Vulns.Count)
+	}
+	return s
 }
 
 func (r Report) Failed() bool {

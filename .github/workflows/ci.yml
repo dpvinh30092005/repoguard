@@ -31,6 +31,23 @@ jobs:
       - name: govulncheck
         run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
+  # The executor's Docker sandbox, for real: build the CI image, run a project in it.
+  executor-integration:
+    name: executor (real docker)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build CI runner image
+        run: docker build -f deploy/ci-runner.Dockerfile -t repoguard-ci:test .
+      - name: Run sandbox integration tests
+        env:
+          REPOGUARD_TEST_IMAGE: repoguard-ci:test
+        run: go test -tags integration -run Docker -v ./internal/executor/
+
   # Dogfooding: repoguard checks itself with the same reusable workflow consumers use.
   self-check:
     uses: ./.github/workflows/repoguard-ci.yml
@@ -54,6 +71,8 @@ jobs:
             file: deploy/Dockerfile
           - image: repoguard-ci
             file: deploy/ci-runner.Dockerfile
+          - image: repoguard-executor
+            file: deploy/executor.Dockerfile
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3

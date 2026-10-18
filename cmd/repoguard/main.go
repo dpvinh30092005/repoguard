@@ -8,11 +8,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strings"
 	"syscall"
@@ -25,6 +27,7 @@ import (
 	"github.com/dpvinh30092005/repoguard/internal/ci"
 	"github.com/dpvinh30092005/repoguard/internal/config"
 	"github.com/dpvinh30092005/repoguard/internal/engine"
+	"github.com/dpvinh30092005/repoguard/internal/executor"
 	"github.com/dpvinh30092005/repoguard/internal/metrics"
 	"github.com/dpvinh30092005/repoguard/internal/platform"
 	"github.com/dpvinh30092005/repoguard/internal/platform/github"
@@ -121,6 +124,29 @@ func serve(ctx context.Context) error {
 	q := queue.New(queue.Options{Workers: cfg.Workers, Size: cfg.QueueSize, MaxRetries: 4, Logger: log, Metrics: m})
 	q.Start(ctx)
 
+	var xq *queue.Queue
+	if x := cfg.Executor; x.Enabled() {
+		for _, bin := range []string{"docker", "git"} {
+			if _, err := exec.LookPath(bin); err != nil {
+				return fmt.Errorf("REPOGUARD_EXECUTOR=docker needs %q in PATH (use deploy/executor.Dockerfile)", bin)
+			}
+		}
+		xq = queue.New(queue.Options{Workers: x.Concurrency, Size: 200, MaxRetries: 1, JobTimeout: x.Timeout + 10*time.Minute, Logger: log, Metrics: m})
+		xq.Start(ctx)
+		eng.Executor = &executor.Executor{
+			Clients:      eng.Clients,
+			Queue:        xq,
+			AllowedRepos: x.Repos,
+			Log:          log,
+			Metrics:      m,
+			Sandbox: executor.Docker{
+				Image: x.Image, CPUs: x.CPUs, Memory: x.Memory, PidsLimit: x.PidsLimit,
+				Network: x.Network, Runtime: x.Runtime, Timeout: x.Timeout,
+			},
+		}
+		log.Info("executor enabled", "repos", x.Repos, "image", x.Image, "concurrency", x.Concurrency, "runtime", x.Runtime)
+	}
+
 	if cfg.SweepInterval > 0 {
 		go runSweeper(ctx, cfg.SweepInterval, eng, q, log)
 	}
@@ -139,6 +165,11 @@ func serve(ctx context.Context) error {
 	defer cancel()
 	if qerr := q.Close(drain); qerr != nil {
 		log.Warn("queue not fully drained", "err", qerr)
+	}
+	if xq != nil {
+		if qerr := xq.Close(drain); qerr != nil {
+			log.Warn("executor queue not fully drained", "err", qerr)
+		}
 	}
 	log.Info("repoguard stopped")
 	if errors.Is(err, context.Canceled) {
@@ -199,6 +230,7 @@ func runCI(ctx context.Context, args []string) (failed bool, err error) {
 	noVuln := fs.Bool("no-vuln", false, "skip the dependency vulnerability scan")
 	mdPath := fs.String("report", "repoguard-report.md", "markdown report path ('' to disable)")
 	junitPath := fs.String("junit", "repoguard-junit.xml", "JUnit XML report path ('' to disable)")
+	jsonPath := fs.String("json", "", "machine-readable JSON report path (used by the executor)")
 	if err := fs.Parse(args); err != nil {
 		return false, err
 	}
@@ -222,6 +254,15 @@ func runCI(ctx context.Context, args []string) (failed bool, err error) {
 		if f, err := os.OpenFile(summary, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o644); err == nil {
 			_, _ = f.WriteString(md.String())
 			_ = f.Close()
+		}
+	}
+	if *jsonPath != "" {
+		data, err := json.MarshalIndent(report, "", "  ")
+		if err != nil {
+			return false, err
+		}
+		if err := os.WriteFile(*jsonPath, data, 0o644); err != nil {
+			return false, err
 		}
 	}
 	if *junitPath != "" {

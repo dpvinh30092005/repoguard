@@ -114,3 +114,30 @@ func TestClientRequests(t *testing.T) {
 		t.Errorf("labels body = %s", body)
 	}
 }
+
+func TestAuthorCanPushAndGitSource(t *testing.T) {
+	api := platformtest.New(t).
+		On("GET", "/api/v4/projects/99/members/all/7", 200, `{"access_level":30}`).
+		On("GET", "/api/v4/projects/99/members/all/8", 200, `{"access_level":20}`)
+	c := New(api.URL+"/", "glpat-x", http.DefaultClient)
+	repo := platform.Repo{Platform: platform.GitLab, ID: "99", FullName: "grp/svc"}
+	for id, want := range map[int64]bool{7: true, 8: false, 9: false, 0: false} {
+		got, err := c.AuthorCanPush(context.Background(), repo, &platform.ChangeRequest{AuthorID: id})
+		if err != nil || got != want {
+			t.Errorf("author %d: got %v err %v, want %v", id, got, err, want)
+		}
+	}
+	src, _ := c.GitSource(context.Background(), repo, &platform.ChangeRequest{Number: 5})
+	if src.URL != api.URL+"/grp/svc.git" || src.Ref != "refs/merge-requests/5/head" || src.Password != "glpat-x" || strings.Contains(src.URL, "glpat") {
+		t.Fatalf("src = %+v", src)
+	}
+}
+
+func TestMergeRequestForkDetection(t *testing.T) {
+	api := platformtest.New(t).On("GET", "/api/v4/projects/99/merge_requests/5", 200,
+		`{"iid":5,"state":"opened","author":{"id":7,"username":"ann"},"source_project_id":123,"target_project_id":99}`)
+	cr, err := New(api.URL, "t", http.DefaultClient).GetChangeRequest(context.Background(), platform.Repo{ID: "99"}, 5)
+	if err != nil || !cr.FromFork || cr.AuthorID != 7 || cr.State != "open" {
+		t.Fatalf("cr=%+v err=%v", cr, err)
+	}
+}

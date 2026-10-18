@@ -16,12 +16,14 @@ import (
 )
 
 type Client struct {
-	rest *platform.REST
+	rest  *platform.REST
+	web   string
+	token string
 }
 
 // New builds a client for baseURL (e.g. https://gitlab.com).
 func New(baseURL, token string, hc *http.Client) *Client {
-	return &Client{rest: &platform.REST{
+	return &Client{web: strings.TrimRight(baseURL, "/"), token: token, rest: &platform.REST{
 		HTTP: hc, BaseURL: strings.TrimRight(baseURL, "/") + "/api/v4", UserAgent: "repoguard",
 		Authorize: func(r *http.Request) error { r.Header.Set("PRIVATE-TOKEN", token); return nil },
 	}}
@@ -41,6 +43,7 @@ func noun(t platform.Target) string {
 // --- wire types ---
 
 type glUser struct {
+	ID       int64  `json:"id"`
 	Username string `json:"username"`
 }
 
@@ -56,6 +59,8 @@ type glMR struct {
 	SHA          string   `json:"sha"`
 	SourceBranch string   `json:"source_branch"`
 	TargetBranch string   `json:"target_branch"`
+	SourceProjID int64    `json:"source_project_id"`
+	TargetProjID int64    `json:"target_project_id"`
 	DiffRefs     struct {
 		BaseSHA  string `json:"base_sha"`
 		HeadSHA  string `json:"head_sha"`
@@ -136,6 +141,7 @@ func (c *Client) GetChangeRequest(ctx context.Context, repo platform.Repo, numbe
 		Number: mr.IID, Title: mr.Title, Body: mr.Description, Author: mr.Author.Username, URL: mr.WebURL,
 		Draft: mr.Draft, State: normState(mr.State), HeadSHA: head, BaseSHA: mr.DiffRefs.BaseSHA,
 		StartSHA: mr.DiffRefs.StartSHA, HeadRef: mr.SourceBranch, BaseRef: mr.TargetBranch, Labels: mr.Labels,
+		AuthorID: mr.Author.ID, FromFork: mr.SourceProjID != mr.TargetProjID,
 	}, nil
 }
 
@@ -324,6 +330,33 @@ func (c *Client) ListOpenIssues(ctx context.Context, repo platform.Repo, limit i
 func (c *Client) CloseIssue(ctx context.Context, repo platform.Repo, number int, _ platform.CloseReason) error {
 	_, err := c.rest.Do(ctx, http.MethodPut, fmt.Sprintf("%s/issues/%d", project(repo), number), map[string]string{"state_event": "close"}, nil)
 	return err
+}
+
+// AuthorCanPush checks the author's effective (incl. inherited) membership: Developer = 30.
+func (c *Client) AuthorCanPush(ctx context.Context, repo platform.Repo, cr *platform.ChangeRequest) (bool, error) {
+	if cr.AuthorID == 0 {
+		return false, nil
+	}
+	var member struct {
+		AccessLevel int `json:"access_level"`
+	}
+	p := fmt.Sprintf("%s/members/all/%d", project(repo), cr.AuthorID)
+	if _, err := c.rest.Do(ctx, http.MethodGet, p, nil, &member); err != nil {
+		if errors.Is(err, platform.ErrNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	return member.AccessLevel >= 30, nil
+}
+
+func (c *Client) GitSource(_ context.Context, repo platform.Repo, cr *platform.ChangeRequest) (platform.GitSource, error) {
+	return platform.GitSource{
+		URL:      c.web + "/" + repo.FullName + ".git",
+		Username: "oauth2",
+		Password: c.token,
+		Ref:      fmt.Sprintf("refs/merge-requests/%d/head", cr.Number),
+	}, nil
 }
 
 var _ platform.Client = (*Client)(nil)

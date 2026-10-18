@@ -18,6 +18,7 @@ import (
 	"github.com/dpvinh30092005/repoguard/internal/config"
 	"github.com/dpvinh30092005/repoguard/internal/metrics"
 	"github.com/dpvinh30092005/repoguard/internal/platform"
+	"github.com/dpvinh30092005/repoguard/internal/queue"
 	"github.com/dpvinh30092005/repoguard/internal/triage"
 )
 
@@ -42,6 +43,14 @@ type Engine struct {
 	Metrics   *metrics.Registry
 	PublicURL string
 	Now       func() time.Time
+	// Executor, when set, builds change requests for repos without working CI.
+	Executor Submitter
+}
+
+// Submitter queues a sandboxed `repoguard ci` run (see package executor).
+type Submitter interface {
+	Allowed(repo platform.Repo) bool
+	Submit(repo platform.Repo, cr *platform.ChangeRequest) error
 }
 
 func New(clients []platform.Client, cks []checks.Check, log *slog.Logger, m *metrics.Registry) *Engine {
@@ -124,6 +133,12 @@ func (e *Engine) handleChangeRequest(ctx context.Context, c platform.Client, ev 
 	if cr.Draft && cfg.PullRequest.SkipDrafts {
 		return nil
 	}
+	if e.Executor != nil && ev.CodeChanged && e.Executor.Allowed(repo) {
+		// Runs on its own queue, in parallel with the checks below; duplicates collapse.
+		if err := e.Executor.Submit(repo, cr); err != nil && !errors.Is(err, queue.ErrDuplicate) {
+			e.Log.Warn("executor submit failed", "repo", repo.String(), "number", cr.Number, "err", err)
+		}
+	}
 	files, err := c.ListChanges(ctx, repo, cr)
 	if err != nil {
 		return err
@@ -141,7 +156,7 @@ func (e *Engine) handleChangeRequest(ctx context.Context, c platform.Client, ev 
 		selected = append(selected, ch)
 	}
 	for _, ch := range selected {
-		if err := c.SetStatus(ctx, repo, cr.HeadSHA, platform.Status{Context: statusPrefix + ch.Name(), State: platform.StatePending, Description: "Running…", TargetURL: e.PublicURL}); err != nil {
+		if err := e.setStatus(ctx, c, repo, cr.HeadSHA, platform.Status{Context: statusPrefix + ch.Name(), State: platform.StatePending, Description: "Running…", TargetURL: e.PublicURL}); err != nil {
 			return err
 		}
 	}
@@ -152,7 +167,7 @@ func (e *Engine) handleChangeRequest(ctx context.Context, c platform.Client, ev 
 	// inline review last, so a retry after a partial failure can't double-post.
 	for _, r := range results {
 		st := platform.Status{Context: statusPrefix + r.Check, State: r.State, Description: r.Summary, TargetURL: e.PublicURL}
-		if err := c.SetStatus(ctx, repo, cr.HeadSHA, st); err != nil {
+		if err := e.setStatus(ctx, c, repo, cr.HeadSHA, st); err != nil {
 			return err
 		}
 	}
@@ -165,6 +180,17 @@ func (e *Engine) handleChangeRequest(ctx context.Context, c platform.Client, ev 
 		}
 	}
 	return e.postInline(ctx, c, repo, cr, results)
+}
+
+// setStatus tolerates 403: GitLab may refuse commit statuses when CI/CD is
+// disabled for a project; the summary comment still carries every result.
+func (e *Engine) setStatus(ctx context.Context, c platform.Client, repo platform.Repo, sha string, st platform.Status) error {
+	err := c.SetStatus(ctx, repo, sha, st)
+	if platform.IsForbidden(err) {
+		e.Log.Warn("commit status refused (403); results are in the summary comment", "repo", repo.String(), "context", st.Context)
+		return nil
+	}
+	return err
 }
 
 func (e *Engine) runChecks(ctx context.Context, cks []checks.Check, in checks.Input) []checks.Result {

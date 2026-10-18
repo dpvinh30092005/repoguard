@@ -13,7 +13,11 @@ RUN CGO_ENABLED=0 GOTOOLCHAIN=auto GOBIN=/out go install github.com/google/osv-s
 
 FROM node:22-bookworm
 COPY --from=golang:1.24-bookworm /usr/local/go /usr/local/go
-ENV PATH=/usr/local/go/bin:/root/go/bin:$PATH
+# Throwaway CI container: let pip install into the system Python (PEP 668),
+# and fetch newer Go toolchains when a project's go.mod asks for one.
+ENV PATH=/usr/local/go/bin:/root/go/bin:$PATH \
+    PIP_BREAK_SYSTEM_PACKAGES=1 \
+    GOTOOLCHAIN=auto
 RUN apt-get update \
  && apt-get install -y --no-install-recommends python3 python3-pip python3-venv git ca-certificates \
  && ln -sf /usr/bin/python3 /usr/local/bin/python \
