@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/example/repoguard/internal/platform"
+	"github.com/dpvinh30092005/repoguard/internal/platform"
 )
 
 const botMarker = "<!-- repoguard"

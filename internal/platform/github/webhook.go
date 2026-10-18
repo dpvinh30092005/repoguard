@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/example/repoguard/internal/platform"
+	"github.com/dpvinh30092005/repoguard/internal/platform"
 )
 
 // BotMarker is embedded in every comment the bot writes; used to ignore our own activity.

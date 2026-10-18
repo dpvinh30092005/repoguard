@@ -8,9 +8,9 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/example/repoguard/internal/checks"
-	"github.com/example/repoguard/internal/config"
-	"github.com/example/repoguard/internal/triage"
+	"github.com/dpvinh30092005/repoguard/internal/checks"
+	"github.com/dpvinh30092005/repoguard/internal/config"
+	"github.com/dpvinh30092005/repoguard/internal/triage"
 )
 
 type Check struct{}

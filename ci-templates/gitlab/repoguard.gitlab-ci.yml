@@ -1,15 +1,15 @@
 # Include from any project's .gitlab-ci.yml:
 #
 #   include:
-#     - project: platform/repoguard          # or: remote: https://.../repoguard.gitlab-ci.yml
-#       ref: v1
-#       file: ci-templates/gitlab/repoguard.gitlab-ci.yml
+#     - remote: https://raw.githubusercontent.com/dpvinh30092005/repoguard/v1/ci-templates/gitlab/repoguard.gitlab-ci.yml
+#
+# (or mirror this repo into your GitLab and use `project:` + `ref:` + `file:`)
 #
 # Results show in the MR widget (JUnit) and as a pipeline status the
 # repoguard service references in its summary comment.
 
 variables:
-  REPOGUARD_IMAGE: ghcr.io/example/repoguard-ci:1
+  REPOGUARD_IMAGE: ghcr.io/dpvinh30092005/repoguard-ci:1
   REPOGUARD_ARGS: ""
 
 repoguard:

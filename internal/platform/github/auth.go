@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/example/repoguard/internal/platform"
+	"github.com/dpvinh30092005/repoguard/internal/platform"
 )
 
 // TokenSource yields a token able to act on repositories of an installation.

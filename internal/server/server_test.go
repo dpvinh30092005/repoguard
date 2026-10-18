@@ -14,15 +14,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/example/repoguard/internal/checks"
-	"github.com/example/repoguard/internal/checks/prrules"
-	"github.com/example/repoguard/internal/checks/secrets"
-	"github.com/example/repoguard/internal/engine"
-	"github.com/example/repoguard/internal/metrics"
-	"github.com/example/repoguard/internal/platform"
-	"github.com/example/repoguard/internal/platform/github"
-	"github.com/example/repoguard/internal/platform/platformtest"
-	"github.com/example/repoguard/internal/queue"
+	"github.com/dpvinh30092005/repoguard/internal/checks"
+	"github.com/dpvinh30092005/repoguard/internal/checks/prrules"
+	"github.com/dpvinh30092005/repoguard/internal/checks/secrets"
+	"github.com/dpvinh30092005/repoguard/internal/engine"
+	"github.com/dpvinh30092005/repoguard/internal/metrics"
+	"github.com/dpvinh30092005/repoguard/internal/platform"
+	"github.com/dpvinh30092005/repoguard/internal/platform/github"
+	"github.com/dpvinh30092005/repoguard/internal/platform/platformtest"
+	"github.com/dpvinh30092005/repoguard/internal/queue"
 )
 
 // TestEndToEndGitHub drives the real stack: signed webhook -> queue -> engine

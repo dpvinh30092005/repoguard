@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   repoguard:
-    uses: example/repoguard/.github/workflows/repoguard-ci.yml@v1
+    uses: dpvinh30092005/repoguard/.github/workflows/repoguard-ci.yml@v1
     # with:
     #   args: "--stages lint,test"   # e.g. skip install/build
     #   changed-only: false          # check every project on PRs too

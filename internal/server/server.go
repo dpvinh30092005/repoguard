@@ -9,11 +9,11 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/example/repoguard/internal/metrics"
-	"github.com/example/repoguard/internal/platform"
-	"github.com/example/repoguard/internal/platform/github"
-	"github.com/example/repoguard/internal/platform/gitlab"
-	"github.com/example/repoguard/internal/queue"
+	"github.com/dpvinh30092005/repoguard/internal/metrics"
+	"github.com/dpvinh30092005/repoguard/internal/platform"
+	"github.com/dpvinh30092005/repoguard/internal/platform/github"
+	"github.com/dpvinh30092005/repoguard/internal/platform/gitlab"
+	"github.com/dpvinh30092005/repoguard/internal/queue"
 )
 
 const maxBody = 25 << 20 // GitHub caps payloads at 25 MB

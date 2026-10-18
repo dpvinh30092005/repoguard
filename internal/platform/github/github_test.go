@@ -16,8 +16,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/example/repoguard/internal/platform"
-	"github.com/example/repoguard/internal/platform/platformtest"
+	"github.com/dpvinh30092005/repoguard/internal/platform"
+	"github.com/dpvinh30092005/repoguard/internal/platform/platformtest"
 )
 
 func sign(secret, body string) string {

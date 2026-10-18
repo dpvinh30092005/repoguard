@@ -8,8 +8,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/example/repoguard/internal/config"
-	"github.com/example/repoguard/internal/platform"
+	"github.com/dpvinh30092005/repoguard/internal/config"
+	"github.com/dpvinh30092005/repoguard/internal/platform"
 )
 
 // Assessment is the outcome of looking at one issue.

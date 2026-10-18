@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/example/repoguard/internal/config"
-	"github.com/example/repoguard/internal/platform"
+	"github.com/dpvinh30092005/repoguard/internal/config"
+	"github.com/dpvinh30092005/repoguard/internal/platform"
 )
 
 func TestAssessBugMissingInfo(t *testing.T) {

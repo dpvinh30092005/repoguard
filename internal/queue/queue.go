@@ -14,8 +14,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/example/repoguard/internal/metrics"
-	"github.com/example/repoguard/internal/platform"
+	"github.com/dpvinh30092005/repoguard/internal/metrics"
+	"github.com/dpvinh30092005/repoguard/internal/platform"
 )
 
 type Job struct {

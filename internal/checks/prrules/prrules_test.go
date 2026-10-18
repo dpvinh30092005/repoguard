@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/example/repoguard/internal/checks"
-	"github.com/example/repoguard/internal/config"
-	"github.com/example/repoguard/internal/platform"
+	"github.com/dpvinh30092005/repoguard/internal/checks"
+	"github.com/dpvinh30092005/repoguard/internal/config"
+	"github.com/dpvinh30092005/repoguard/internal/platform"
 )
 
 func run(t *testing.T, cr platform.ChangeRequest, files []platform.FileChange) checks.Result {

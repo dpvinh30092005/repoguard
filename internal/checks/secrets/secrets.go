@@ -9,10 +9,10 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/example/repoguard/internal/checks"
-	"github.com/example/repoguard/internal/config"
-	"github.com/example/repoguard/internal/diff"
-	"github.com/example/repoguard/internal/glob"
+	"github.com/dpvinh30092005/repoguard/internal/checks"
+	"github.com/dpvinh30092005/repoguard/internal/config"
+	"github.com/dpvinh30092005/repoguard/internal/diff"
+	"github.com/dpvinh30092005/repoguard/internal/glob"
 )
 
 // AllowMarker on a line suppresses findings for it (for test fixtures, docs).

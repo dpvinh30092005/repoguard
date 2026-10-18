@@ -19,9 +19,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/example/repoguard/internal/checks/secrets"
-	"github.com/example/repoguard/internal/config"
-	"github.com/example/repoguard/internal/glob"
+	"github.com/dpvinh30092005/repoguard/internal/checks/secrets"
+	"github.com/dpvinh30092005/repoguard/internal/config"
+	"github.com/dpvinh30092005/repoguard/internal/glob"
 )
 
 var Stages = []string{"install", "lint", "build", "test"}

@@ -9,11 +9,11 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/example/repoguard/internal/checks"
-	"github.com/example/repoguard/internal/config"
-	"github.com/example/repoguard/internal/diff"
-	"github.com/example/repoguard/internal/glob"
-	"github.com/example/repoguard/internal/platform"
+	"github.com/dpvinh30092005/repoguard/internal/checks"
+	"github.com/dpvinh30092005/repoguard/internal/config"
+	"github.com/dpvinh30092005/repoguard/internal/diff"
+	"github.com/dpvinh30092005/repoguard/internal/glob"
+	"github.com/dpvinh30092005/repoguard/internal/platform"
 )
 
 // Request is what the model sees. Diff is pre-rendered with line numbers.

@@ -1,4 +1,4 @@
-module github.com/example/repoguard
+module github.com/dpvinh30092005/repoguard
 
 go 1.24
 

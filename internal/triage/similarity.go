@@ -6,7 +6,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/example/repoguard/internal/platform"
+	"github.com/dpvinh30092005/repoguard/internal/platform"
 )
 
 // Similar is a candidate duplicate.

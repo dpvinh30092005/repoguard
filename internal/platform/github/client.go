@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/example/repoguard/internal/platform"
+	"github.com/dpvinh30092005/repoguard/internal/platform"
 )
 
 const userAgent = "repoguard"

@@ -6,8 +6,8 @@ package checks
 import (
 	"context"
 
-	"github.com/example/repoguard/internal/config"
-	"github.com/example/repoguard/internal/platform"
+	"github.com/dpvinh30092005/repoguard/internal/config"
+	"github.com/dpvinh30092005/repoguard/internal/platform"
 )
 
 type Severity string

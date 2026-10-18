@@ -3,7 +3,7 @@
 #
 #   jobs:
 #     repoguard:
-#       uses: example/repoguard/.github/workflows/repoguard-ci.yml@v1
+#       uses: dpvinh30092005/repoguard/.github/workflows/repoguard-ci.yml@v1
 name: repoguard ci
 
 on:
@@ -73,7 +73,7 @@ jobs:
           if [ -n "$RG_SOURCE" ]; then
             (cd "$RG_SOURCE" && go build -o "$(go env GOPATH)/bin/repoguard" ./cmd/repoguard)
           else
-            go install "github.com/example/repoguard/cmd/repoguard@${RG_VERSION}"
+            go install "github.com/dpvinh30092005/repoguard/cmd/repoguard@${RG_VERSION}"
           fi
           go install "github.com/google/osv-scanner/v2/cmd/osv-scanner@${OSV_VERSION}"
           python -m pip install --quiet ruff pytest
