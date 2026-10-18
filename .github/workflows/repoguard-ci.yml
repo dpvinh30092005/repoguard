@@ -19,7 +19,7 @@ on:
         default: ""
       osv-scanner-version:
         type: string
-        default: latest
+        default: v2.7.0
       go-version:
         type: string
         default: stable
@@ -75,7 +75,8 @@ jobs:
           else
             go install "github.com/dpvinh30092005/repoguard/cmd/repoguard@${RG_VERSION}"
           fi
-          go install "github.com/google/osv-scanner/v2/cmd/osv-scanner@${OSV_VERSION}"
+          # osv-scanner may need a newer Go than the project's; let Go fetch it.
+          GOTOOLCHAIN=auto go install "github.com/google/osv-scanner/v2/cmd/osv-scanner@${OSV_VERSION}"
           python -m pip install --quiet ruff pytest
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 

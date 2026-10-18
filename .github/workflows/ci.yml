@@ -47,6 +47,7 @@ jobs:
       contents: read
       packages: write
     strategy:
+      fail-fast: false # one broken image must not hide the other's result
       matrix:
         include:
           - image: repoguard
