@@ -1,0 +1,40 @@
+{{define "content"}}
+<h1>Hướng dẫn</h1>
+<p class="lead">repoguard làm gì và thử nó thế nào.</p>
+
+<div class="card">
+  <h2>repoguard làm gì?</h2>
+  <p>Mỗi khi có <b>Merge Request</b> (MR) mới hoặc commit mới trong MR, repoguard sẽ:</p>
+  <ul>
+    <li><b>Kiểm tra quy tắc MR</b>: tiêu đề đúng chuẩn (vd. <code>feat: thêm đăng nhập</code>), có mô tả, có link issue.</li>
+    <li><b>Quét secret</b>: phát hiện mật khẩu, token lỡ commit vào code.</li>
+    <li><b>AI review</b> (nếu có Anthropic key): góp ý trên từng dòng code.</li>
+    <li><b>Tự chạy CI</b> (nếu bật): build và chạy test trong container cách ly, dành cho dự án đã tắt pipeline trên GitLab.</li>
+  </ul>
+  <p>Với <b>issue</b>: hỏi lại khi thiếu thông tin, tự gắn label, phát hiện trùng lặp.</p>
+  <p>Kết quả hiện thành <b>comment trên MR</b> và ở trang Tổng quan.</p>
+</div>
+
+<div class="card">
+  <h2>Thử trong 5 phút</h2>
+  <ol class="steps">
+    <li><a href="/connect">Kết nối</a> GitLab: dán token có quyền <code>api</code>, bấm “Lưu &amp; kiểm tra”.</li>
+    <li>Vào <a href="/repos">Dự án</a>, chọn một dự án thử và bấm <b>Bật kiểm tra</b>. Muốn thử tự chạy CI thì bấm thêm <b>Bật</b> ở cột “Tự chạy CI”.</li>
+    <li>Trên GitLab, tạo một nhánh, sửa một file rồi mở <b>Merge Request</b> với tiêu đề tuỳ ý, ví dụ “update stuff”.</li>
+    <li>Đợi khoảng 30 giây (repoguard hỏi GitLab mỗi 30 giây), rồi xem MR: sẽ có comment <b>🛡️ repoguard</b> báo tiêu đề sai chuẩn, thiếu mô tả. Nếu bật tự chạy CI, vài phút sau có thêm comment <b>🧪 repoguard ci</b> với kết quả build và test.</li>
+    <li>Sửa tiêu đề thành <code>feat: thử repoguard</code> và thêm mô tả. Comment sẽ tự cập nhật thành ✅.</li>
+  </ol>
+  <p class="hint">Có MR sẵn rồi? Bấm <b>Kiểm tra ngay</b> ở trang Dự án để kiểm tra tất cả MR đang mở.</p>
+</div>
+
+<div class="card">
+  <h2>Không thấy kết quả?</h2>
+  <div class="scroll"><table>
+    <tr><th>Hiện tượng</th><th>Cách xử lý</th></tr>
+    <tr><td>Trang Tổng quan báo “Lỗi” ở GitLab</td><td>Token sai hoặc thiếu quyền <code>api</code>. Tạo token mới ở trang <a href="/connect">Kết nối</a>.</td></tr>
+    <tr><td>MR mở rồi mà không có gì</td><td>Đợi 30 giây rồi tải lại trang. Hoặc bấm “Kiểm tra ngay”. Bảng “Hoạt động gần đây” sẽ ghi lỗi nếu có.</td></tr>
+    <tr><td>Có comment 🛡️ nhưng không có 🧪</td><td>Chưa bật “Tự chạy CI” cho dự án, hoặc trang Tổng quan báo “Thiếu image”: làm theo lệnh hiển thị ở đó.</td></tr>
+    <tr><td>Comment 🧪 báo “Not built automatically”</td><td>MR từ fork, hoặc người mở MR không có quyền Developer. Đây là hàng rào an toàn, không phải lỗi.</td></tr>
+  </table></div>
+</div>
+{{end}}

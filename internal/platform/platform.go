@@ -153,6 +153,16 @@ type Client interface {
 	AuthorCanPush(ctx context.Context, repo Repo, cr *ChangeRequest) (bool, error)
 	// GitSource returns what is needed to fetch the change request's head commit.
 	GitSource(ctx context.Context, repo Repo, cr *ChangeRequest) (GitSource, error)
+
+	// CurrentUser returns the login the credentials belong to (verifies them).
+	CurrentUser(ctx context.Context) (string, error)
+	// ListOpenChangeRequests lists open PRs/MRs, most recently updated first (used by polling).
+	ListOpenChangeRequests(ctx context.Context, repo Repo, limit int) ([]ChangeRequest, error)
+	// CreateWebhook registers repoguard's webhook on a repository and returns its id.
+	CreateWebhook(ctx context.Context, repo Repo, url, secret string) (string, error)
+	DeleteWebhook(ctx context.Context, repo Repo, id string) error
+	// WebURL links to a change request or issue in the platform's UI.
+	WebURL(repo Repo, t Target) string
 }
 
 // GitSource describes how to fetch a change request over HTTPS.

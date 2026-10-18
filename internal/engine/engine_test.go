@@ -127,6 +127,23 @@ func (f *fakeClient) AuthorCanPush(context.Context, platform.Repo, *platform.Cha
 func (f *fakeClient) GitSource(context.Context, platform.Repo, *platform.ChangeRequest) (platform.GitSource, error) {
 	return platform.GitSource{}, nil
 }
+func (f *fakeClient) CurrentUser(context.Context) (string, error) { return "bot", nil }
+func (f *fakeClient) ListOpenChangeRequests(context.Context, platform.Repo, int) ([]platform.ChangeRequest, error) {
+	var out []platform.ChangeRequest
+	for _, cr := range f.crs {
+		if cr.State == "open" {
+			out = append(out, *cr)
+		}
+	}
+	return out, nil
+}
+func (f *fakeClient) CreateWebhook(context.Context, platform.Repo, string, string) (string, error) {
+	return "1", nil
+}
+func (f *fakeClient) DeleteWebhook(context.Context, platform.Repo, string) error { return nil }
+func (f *fakeClient) WebURL(r platform.Repo, t platform.Target) string {
+	return "https://example.test/" + r.FullName + "/" + t.String()
+}
 
 type stubReviewer struct{ calls int }
 
@@ -360,7 +377,7 @@ func TestStatusForbiddenFallsBackToComment(t *testing.T) {
 	c := newFake()
 	c.crs[1] = &platform.ChangeRequest{Number: 1, Title: "bad title", State: "open", HeadSHA: "a"}
 	e := newEngine(c, nil)
-	e.Clients[platform.GitHub] = forbiddingClient{c}
+	e.Clients.Set(forbiddingClient{c})
 	if err := e.Handle(context.Background(), platform.Event{Type: platform.EventCROpened, Repo: testRepo, Number: 1, CodeChanged: true}); err != nil {
 		t.Fatalf("403 on statuses must not fail the job: %v", err)
 	}

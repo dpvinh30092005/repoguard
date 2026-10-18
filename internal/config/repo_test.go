@@ -45,21 +45,21 @@ func TestEmptyFileIsDefault(t *testing.T) {
 	}
 }
 
-func TestExecutorConfigFailsClosed(t *testing.T) {
-	t.Setenv("GITLAB_TOKEN", "t")
-	t.Setenv("GITLAB_WEBHOOK_SECRET", "s")
-
-	t.Setenv("REPOGUARD_EXECUTOR", "docker")
-	if _, err := LoadService(); err == nil {
-		t.Fatal("enabling the executor without an allow-list must fail")
-	}
-
-	t.Setenv("REPOGUARD_EXECUTOR_REPOS", "team/*, org/app")
+func TestExecutorConfig(t *testing.T) {
 	cfg, err := LoadService()
 	if err != nil {
+		t.Fatalf("an unconfigured service must start (set up from the UI): %v", err)
+	}
+	if cfg.Executor.Disabled() || cfg.Executor.Required() || len(cfg.Executor.Repos) != 0 {
+		t.Fatalf("default executor = %+v, want auto with no repos allowed", cfg.Executor)
+	}
+
+	t.Setenv("REPOGUARD_EXECUTOR", "docker")
+	t.Setenv("REPOGUARD_EXECUTOR_REPOS", "team/*, org/app")
+	if cfg, err = LoadService(); err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.Executor.Enabled() || len(cfg.Executor.Repos) != 2 || cfg.Executor.Repos[1] != "org/app" || cfg.Executor.Memory != "4g" {
+	if !cfg.Executor.Required() || len(cfg.Executor.Repos) != 2 || cfg.Executor.Repos[1] != "org/app" || cfg.Executor.Memory != "4g" {
 		t.Fatalf("executor = %+v", cfg.Executor)
 	}
 

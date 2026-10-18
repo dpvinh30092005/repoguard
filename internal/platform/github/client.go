@@ -388,16 +388,96 @@ func (c *Client) GitSource(ctx context.Context, repo platform.Repo, cr *platform
 	if err != nil {
 		return platform.GitSource{}, err
 	}
-	web := "https://github.com"
-	if base := c.rest.BaseURL; base != "https://api.github.com" {
-		web = strings.TrimSuffix(base, "/api/v3") // GitHub Enterprise Server
-	}
 	return platform.GitSource{
-		URL:      web + "/" + repo.ID + ".git",
+		URL:      c.webBase() + "/" + repo.ID + ".git",
 		Username: "x-access-token",
 		Password: tok,
 		Ref:      fmt.Sprintf("refs/pull/%d/head", cr.Number),
 	}, nil
+}
+
+func (c *Client) CurrentUser(ctx context.Context) (string, error) {
+	if c.app != nil {
+		jwt, err := c.app.JWT()
+		if err != nil {
+			return "", err
+		}
+		rest := *c.rest
+		rest.Authorize = func(r *http.Request) error { r.Header.Set("Authorization", "Bearer "+jwt); return nil }
+		var app struct {
+			Slug string `json:"slug"`
+		}
+		if _, err := rest.Do(ctx, http.MethodGet, "/app", nil, &app); err != nil {
+			return "", err
+		}
+		return app.Slug + "[bot]", nil
+	}
+	var u struct {
+		Login string `json:"login"`
+	}
+	if _, err := c.rest.Do(ctx, http.MethodGet, "/user", nil, &u); err != nil {
+		return "", err
+	}
+	return u.Login, nil
+}
+
+func (c *Client) ListOpenChangeRequests(ctx context.Context, repo platform.Repo, limit int) ([]platform.ChangeRequest, error) {
+	var out []platform.ChangeRequest
+	for page := 1; len(out) < limit; page++ {
+		var pulls []ghPull
+		p := fmt.Sprintf("%s/pulls?state=open&sort=updated&direction=desc&per_page=100&page=%d", repoPath(repo), page)
+		if _, err := c.rest.Do(with(ctx, repo), http.MethodGet, p, nil, &pulls); err != nil {
+			return nil, err
+		}
+		for _, pr := range pulls {
+			if len(out) < limit {
+				out = append(out, *pr.toCR())
+			}
+		}
+		if len(pulls) < 100 {
+			break
+		}
+	}
+	return out, nil
+}
+
+func (c *Client) CreateWebhook(ctx context.Context, repo platform.Repo, url, secret string) (string, error) {
+	body := map[string]any{
+		"name":   "web",
+		"active": true,
+		"events": []string{"pull_request", "issues", "issue_comment"},
+		"config": map[string]string{"url": url, "content_type": "json", "secret": secret, "insecure_ssl": "0"},
+	}
+	var hook struct {
+		ID int64 `json:"id"`
+	}
+	if _, err := c.rest.Do(with(ctx, repo), http.MethodPost, repoPath(repo)+"/hooks", body, &hook); err != nil {
+		return "", err
+	}
+	return fmt.Sprint(hook.ID), nil
+}
+
+func (c *Client) DeleteWebhook(ctx context.Context, repo platform.Repo, id string) error {
+	_, err := c.rest.Do(with(ctx, repo), http.MethodDelete, fmt.Sprintf("%s/hooks/%s", repoPath(repo), url.PathEscape(id)), nil, nil)
+	if platformNotFound(err) {
+		return nil
+	}
+	return err
+}
+
+func (c *Client) WebURL(repo platform.Repo, t platform.Target) string {
+	kind := "issues"
+	if t.Kind == platform.TargetChangeRequest {
+		kind = "pull"
+	}
+	return fmt.Sprintf("%s/%s/%s/%d", c.webBase(), repo.FullName, kind, t.Number)
+}
+
+func (c *Client) webBase() string {
+	if base := c.rest.BaseURL; base != "https://api.github.com" {
+		return strings.TrimSuffix(base, "/api/v3") // GitHub Enterprise Server
+	}
+	return "https://github.com"
 }
 
 func escapePath(p string) string {

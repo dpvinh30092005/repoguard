@@ -43,7 +43,7 @@ func TestEndToEndGitHub(t *testing.T) {
 	eng := engine.New([]platform.Client{client}, []checks.Check{prrules.Check{}, secrets.Check{}}, log, m)
 	q := queue.New(queue.Options{Workers: 2, Logger: log, Metrics: m})
 	q.Start(context.Background())
-	srv := httptest.NewServer((&Server{GitHubSecret: "s3cret", Queue: q, Handle: eng.Handle, Log: log, Metrics: m}).Routes())
+	srv := httptest.NewServer((&Server{Secret: githubOnly, Queue: q, Handle: eng.Handle, Log: log, Metrics: m}).Routes())
 	defer srv.Close()
 
 	body := `{"action":"opened","pull_request":{"number":7,"head":{"sha":"abc123"}},"repository":{"full_name":"acme/api","default_branch":"main"},"sender":{"login":"ann"}}`
@@ -80,7 +80,7 @@ func TestEndToEndGitHub(t *testing.T) {
 func TestWebhookRejectsUnsignedAndDisabled(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	q := queue.New(queue.Options{Logger: log})
-	srv := httptest.NewServer((&Server{GitHubSecret: "s3cret", Queue: q, Log: log, Metrics: metrics.New()}).Routes())
+	srv := httptest.NewServer((&Server{Secret: githubOnly, Queue: q, Log: log, Metrics: metrics.New()}).Routes())
 	defer srv.Close()
 
 	if r := post(t, srv.URL+"/webhooks/github", `{}`, map[string]string{"X-GitHub-Event": "pull_request"}); r.StatusCode != http.StatusUnauthorized {
@@ -99,6 +99,13 @@ func TestWebhookRejectsUnsignedAndDisabled(t *testing.T) {
 			t.Errorf("%s: %v %v", path, r.StatusCode, err)
 		}
 	}
+}
+
+func githubOnly(k platform.Kind) string {
+	if k == platform.GitHub {
+		return "s3cret"
+	}
+	return ""
 }
 
 func post(t *testing.T, url, body string, headers map[string]string) *http.Response {

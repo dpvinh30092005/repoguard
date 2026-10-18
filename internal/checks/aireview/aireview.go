@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/dpvinh30092005/repoguard/internal/checks"
 	"github.com/dpvinh30092005/repoguard/internal/config"
@@ -51,7 +52,41 @@ func (c Check) Name() string { return "ai-review" }
 
 func (c Check) CodeOnly() bool { return true }
 
-func (c Check) Enabled(cfg config.Repo) bool { return c.Reviewer != nil && cfg.AIReview.Enabled }
+func (c Check) Enabled(cfg config.Repo) bool {
+	if a, ok := c.Reviewer.(interface{ Available() bool }); ok && !a.Available() {
+		return false
+	}
+	return c.Reviewer != nil && cfg.AIReview.Enabled
+}
+
+// Switchable is a Reviewer that can be (re)configured at runtime, e.g. when an
+// API key is entered in the web UI. Unset, the AI check reports disabled.
+type Switchable struct {
+	mu sync.RWMutex
+	r  Reviewer
+}
+
+func (s *Switchable) Set(r Reviewer) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.r = r
+}
+
+func (s *Switchable) Available() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.r != nil
+}
+
+func (s *Switchable) Review(ctx context.Context, req Request) (*Review, error) {
+	s.mu.RLock()
+	r := s.r
+	s.mu.RUnlock()
+	if r == nil {
+		return nil, fmt.Errorf("AI review is not configured")
+	}
+	return r.Review(ctx, req)
+}
 
 func (c Check) Run(ctx context.Context, in checks.Input) (checks.Result, error) {
 	cfg := in.Config.AIReview

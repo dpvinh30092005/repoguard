@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/dpvinh30092005/repoguard/internal/activity"
 	"github.com/dpvinh30092005/repoguard/internal/ci"
 	"github.com/dpvinh30092005/repoguard/internal/config"
 	"github.com/dpvinh30092005/repoguard/internal/glob"
@@ -31,17 +32,24 @@ const (
 var ErrNotAllowed = errors.New("repository is not allowed to use the executor")
 
 type Executor struct {
-	Clients      map[platform.Kind]platform.Client
-	Sandbox      Sandbox
-	Queue        *queue.Queue // dedicated queue: slow builds must not delay comments/reviews
-	AllowedRepos []string     // globs on Repo.FullName, e.g. "team/*"
-	Log          *slog.Logger
-	Metrics      *metrics.Registry
+	Clients  *platform.Registry
+	Sandbox  Sandbox
+	Queue    *queue.Queue // dedicated queue: slow builds must not delay comments/reviews
+	Allow    func(platform.Repo) bool
+	Log      *slog.Logger
+	Metrics  *metrics.Registry
+	Activity *activity.Log // optional: feeds the web UI
 
 	fetch func(ctx context.Context, src platform.GitSource, sha string) (string, error)
 }
 
-func (x *Executor) Allowed(repo platform.Repo) bool { return glob.Any(x.AllowedRepos, repo.FullName) }
+// Allowed reports whether repo may be built. Nothing is allowed by default.
+func (x *Executor) Allowed(repo platform.Repo) bool { return x.Allow != nil && x.Allow(repo) }
+
+// AllowGlobs allows repositories whose full name matches one of the globs (e.g. "team/*").
+func AllowGlobs(globs []string) func(platform.Repo) bool {
+	return func(r platform.Repo) bool { return glob.Any(globs, r.FullName) }
+}
 
 // Submit queues a run for the change request's current head.
 func (x *Executor) Submit(repo platform.Repo, cr *platform.ChangeRequest) error {
@@ -57,15 +65,23 @@ func (x *Executor) Submit(repo platform.Repo, cr *platform.ChangeRequest) error 
 
 // Run fetches, builds and reports one change request.
 func (x *Executor) Run(ctx context.Context, repo platform.Repo, cr *platform.ChangeRequest) error {
-	c, ok := x.Clients[repo.Platform]
+	c, ok := x.Clients.Get(repo.Platform)
 	if !ok {
 		return fmt.Errorf("no client for %s", repo.Platform)
+	}
+	record := func(result, detail string) {
+		x.Activity.Add(activity.Entry{
+			Platform: string(repo.Platform), Repo: repo.FullName, Kind: "CI", Number: cr.Number,
+			Event: "sandbox build " + short(cr.HeadSHA), Result: result, Detail: detail,
+			URL: c.WebURL(repo, platform.CR(cr.Number)),
+		})
 	}
 	target := platform.CR(cr.Number)
 	log := x.Log.With("repo", repo.String(), "number", cr.Number, "sha", cr.HeadSHA)
 
 	if cr.FromFork {
 		x.count("skipped_fork")
+		record("skipped", "fork")
 		return c.UpsertComment(ctx, repo, target, Marker, skipped(cr, "it comes from a fork"))
 	}
 	trusted, err := c.AuthorCanPush(ctx, repo, cr)
@@ -74,6 +90,7 @@ func (x *Executor) Run(ctx context.Context, repo platform.Repo, cr *platform.Cha
 	}
 	if !trusted {
 		x.count("skipped_untrusted")
+		record("skipped", "author lacks Developer access")
 		return c.UpsertComment(ctx, repo, target, Marker, skipped(cr, "@"+cr.Author+" does not have Developer/write access"))
 	}
 
@@ -107,6 +124,7 @@ func (x *Executor) Run(ctx context.Context, repo platform.Repo, cr *platform.Cha
 	res, err := x.Sandbox.Run(ctx, dir)
 	if err != nil {
 		x.count("sandbox_error")
+		record("error", err.Error())
 		_ = x.setStatus(ctx, c, repo, cr, platform.StateError, "Sandbox error")
 		_ = c.UpsertComment(ctx, repo, target, Marker, fmt.Sprintf("%s\n### 🧪 repoguard ci\n⚠️ The sandbox failed before the build could run: `%v`. A maintainer should check the repoguard logs.", Marker, err))
 		return err
@@ -114,6 +132,11 @@ func (x *Executor) Run(ctx context.Context, repo platform.Repo, cr *platform.Cha
 
 	state, summary, body := outcome(cr, res)
 	x.count(string(state))
+	result := "passed"
+	if state != platform.StateSuccess {
+		result = "failed"
+	}
+	record(result, summary)
 	log.Info("executor: done", "state", state, "summary", summary)
 	if err := x.setStatus(ctx, c, repo, cr, state, summary); err != nil {
 		return err

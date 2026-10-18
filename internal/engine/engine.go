@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/dpvinh30092005/repoguard/internal/activity"
 	"github.com/dpvinh30092005/repoguard/internal/checks"
 	"github.com/dpvinh30092005/repoguard/internal/config"
 	"github.com/dpvinh30092005/repoguard/internal/metrics"
@@ -37,7 +38,8 @@ const (
 )
 
 type Engine struct {
-	Clients   map[platform.Kind]platform.Client
+	Clients   *platform.Registry
+	Activity  *activity.Log // optional: feeds the web UI
 	Checks    []checks.Check
 	Log       *slog.Logger
 	Metrics   *metrics.Registry
@@ -54,17 +56,13 @@ type Submitter interface {
 }
 
 func New(clients []platform.Client, cks []checks.Check, log *slog.Logger, m *metrics.Registry) *Engine {
-	e := &Engine{Clients: map[platform.Kind]platform.Client{}, Checks: cks, Log: log, Metrics: m, Now: time.Now}
-	for _, c := range clients {
-		e.Clients[c.Kind()] = c
-	}
-	return e
+	return &Engine{Clients: platform.NewRegistry(clients...), Checks: cks, Log: log, Metrics: m, Now: time.Now}
 }
 
 // Handle processes one event. Returned errors are retried by the queue when
 // platform.IsRetryable says so.
 func (e *Engine) Handle(ctx context.Context, ev platform.Event) error {
-	c, ok := e.Clients[ev.Repo.Platform]
+	c, ok := e.Clients.Get(ev.Repo.Platform)
 	if !ok {
 		return fmt.Errorf("no client for platform %q", ev.Repo.Platform)
 	}
@@ -89,7 +87,27 @@ func (e *Engine) Handle(ctx context.Context, ev platform.Event) error {
 	}
 	e.Metrics.Inc("repoguard_events_total", "platform", string(ev.Repo.Platform), "type", string(ev.Type), "result", result)
 	log.Info("event handled", "result", result, "took", e.Now().Sub(start).Round(time.Millisecond), "err", err)
+	e.record(c, ev, result, err)
 	return err
+}
+
+func (e *Engine) record(c platform.Client, ev platform.Event, result string, err error) {
+	if e.Activity == nil {
+		return
+	}
+	kind, target := "Issue", platform.IssueT(ev.Number)
+	switch ev.Type {
+	case platform.EventCROpened, platform.EventCRUpdated, platform.EventCRMerged:
+		kind, target = "MR", platform.CR(ev.Number)
+	}
+	entry := activity.Entry{
+		Platform: string(ev.Repo.Platform), Repo: ev.Repo.FullName, Kind: kind, Number: ev.Number,
+		Event: string(ev.Type), Result: result, URL: c.WebURL(ev.Repo, target),
+	}
+	if err != nil {
+		entry.Detail = firstLine(err.Error())
+	}
+	e.Activity.Add(entry)
 }
 
 // loadConfig reads the policy from the default branch. A broken file falls back
@@ -487,7 +505,7 @@ func (e *Engine) handleActivity(ctx context.Context, c platform.Client, ev platf
 func (e *Engine) Repos(ctx context.Context) ([]platform.Repo, error) {
 	var all []platform.Repo
 	var errs []error
-	for _, c := range e.Clients {
+	for _, c := range e.Clients.All() {
 		repos, err := c.ListRepos(ctx)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", c.Kind(), err))
@@ -500,7 +518,7 @@ func (e *Engine) Repos(ctx context.Context) ([]platform.Repo, error) {
 
 // SweepRepo applies stale and SLA policies to one repository's open issues.
 func (e *Engine) SweepRepo(ctx context.Context, repo platform.Repo) error {
-	c, ok := e.Clients[repo.Platform]
+	c, ok := e.Clients.Get(repo.Platform)
 	if !ok {
 		return fmt.Errorf("no client for %s", repo.Platform)
 	}

@@ -133,6 +133,10 @@ func (c *Client) GetChangeRequest(ctx context.Context, repo platform.Repo, numbe
 	if _, err := c.rest.Do(ctx, http.MethodGet, fmt.Sprintf("%s/merge_requests/%d", project(repo), number), nil, &mr); err != nil {
 		return nil, err
 	}
+	return mr.toCR(), nil
+}
+
+func (mr glMR) toCR() *platform.ChangeRequest {
 	head := mr.DiffRefs.HeadSHA
 	if head == "" {
 		head = mr.SHA
@@ -142,7 +146,7 @@ func (c *Client) GetChangeRequest(ctx context.Context, repo platform.Repo, numbe
 		Draft: mr.Draft, State: normState(mr.State), HeadSHA: head, BaseSHA: mr.DiffRefs.BaseSHA,
 		StartSHA: mr.DiffRefs.StartSHA, HeadRef: mr.SourceBranch, BaseRef: mr.TargetBranch, Labels: mr.Labels,
 		AuthorID: mr.Author.ID, FromFork: mr.SourceProjID != mr.TargetProjID,
-	}, nil
+	}
 }
 
 func (c *Client) ListChanges(ctx context.Context, repo platform.Repo, cr *platform.ChangeRequest) ([]platform.FileChange, error) {
@@ -357,6 +361,64 @@ func (c *Client) GitSource(_ context.Context, repo platform.Repo, cr *platform.C
 		Password: c.token,
 		Ref:      fmt.Sprintf("refs/merge-requests/%d/head", cr.Number),
 	}, nil
+}
+
+func (c *Client) CurrentUser(ctx context.Context) (string, error) {
+	var u glUser
+	if _, err := c.rest.Do(ctx, http.MethodGet, "/user", nil, &u); err != nil {
+		return "", err
+	}
+	return u.Username, nil
+}
+
+func (c *Client) ListOpenChangeRequests(ctx context.Context, repo platform.Repo, limit int) ([]platform.ChangeRequest, error) {
+	var out []platform.ChangeRequest
+	for page := 1; len(out) < limit; page++ {
+		var mrs []glMR
+		p := fmt.Sprintf("%s/merge_requests?state=opened&order_by=updated_at&sort=desc&per_page=100&page=%d", project(repo), page)
+		if _, err := c.rest.Do(ctx, http.MethodGet, p, nil, &mrs); err != nil {
+			return nil, err
+		}
+		for _, mr := range mrs {
+			if len(out) < limit {
+				out = append(out, *mr.toCR())
+			}
+		}
+		if len(mrs) < 100 {
+			break
+		}
+	}
+	return out, nil
+}
+
+func (c *Client) CreateWebhook(ctx context.Context, repo platform.Repo, url, secret string) (string, error) {
+	body := map[string]any{
+		"url": url, "token": secret, "enable_ssl_verification": true,
+		"merge_requests_events": true, "issues_events": true, "note_events": true, "push_events": false,
+	}
+	var hook struct {
+		ID int64 `json:"id"`
+	}
+	if _, err := c.rest.Do(ctx, http.MethodPost, project(repo)+"/hooks", body, &hook); err != nil {
+		return "", err
+	}
+	return fmt.Sprint(hook.ID), nil
+}
+
+func (c *Client) DeleteWebhook(ctx context.Context, repo platform.Repo, id string) error {
+	_, err := c.rest.Do(ctx, http.MethodDelete, fmt.Sprintf("%s/hooks/%s", project(repo), url.PathEscape(id)), nil, nil)
+	if errors.Is(err, platform.ErrNotFound) {
+		return nil
+	}
+	return err
+}
+
+func (c *Client) WebURL(repo platform.Repo, t platform.Target) string {
+	kind := "issues"
+	if t.Kind == platform.TargetChangeRequest {
+		kind = "merge_requests"
+	}
+	return fmt.Sprintf("%s/%s/-/%s/%d", c.web, repo.FullName, kind, t.Number)
 }
 
 var _ platform.Client = (*Client)(nil)

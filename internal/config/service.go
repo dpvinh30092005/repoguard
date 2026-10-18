@@ -24,8 +24,8 @@ type Service struct {
 
 // Executor runs `repoguard ci` for repos whose own CI is unavailable. Off by default.
 type Executor struct {
-	Mode        string   // "" (off) | "docker"
-	Repos       []string // required allow-list of repo globs, e.g. "team/*"
+	Mode        string   // "" (auto: on if docker is found) | "docker" (required) | "off"
+	Repos       []string // repo globs allowed via env, e.g. "team/*" (the UI can allow more)
 	Image       string
 	CPUs        string
 	Memory      string
@@ -36,7 +36,9 @@ type Executor struct {
 	Concurrency int
 }
 
-func (e Executor) Enabled() bool { return e.Mode == "docker" }
+// Disabled reports an explicit opt-out; Required means startup fails without Docker.
+func (e Executor) Disabled() bool { return e.Mode == "off" }
+func (e Executor) Required() bool { return e.Mode == "docker" }
 
 type GitHub struct {
 	APIURL        string // https://api.github.com or https://ghe.example.com/api/v3
@@ -113,16 +115,14 @@ func LoadService() (Service, error) {
 	if err := loadExecutor(&s.Executor); err != nil {
 		return s, err
 	}
-	if !s.GitHub.Enabled() && !s.GitLab.Enabled() {
-		return s, fmt.Errorf("no platform configured: set GITHUB_WEBHOOK_SECRET + (GITHUB_APP_ID or GITHUB_TOKEN), and/or GITLAB_TOKEN + GITLAB_WEBHOOK_SECRET")
-	}
+	// No platform configured is fine: it can be connected from the web UI.
 	return s, nil
 }
 
 func loadExecutor(x *Executor) error {
 	*x = Executor{
 		Mode:    os.Getenv("REPOGUARD_EXECUTOR"),
-		Image:   env("REPOGUARD_EXECUTOR_IMAGE", "ghcr.io/dpvinh30092005/repoguard-ci:1"),
+		Image:   os.Getenv("REPOGUARD_EXECUTOR_IMAGE"),
 		CPUs:    env("REPOGUARD_EXECUTOR_CPUS", "2"),
 		Memory:  env("REPOGUARD_EXECUTOR_MEMORY", "4g"),
 		Network: env("REPOGUARD_EXECUTOR_NETWORK", "bridge"),
@@ -143,13 +143,13 @@ func loadExecutor(x *Executor) error {
 	if x.PidsLimit, err = envInt("REPOGUARD_EXECUTOR_PIDS_LIMIT", 1024); err != nil {
 		return err
 	}
-	switch {
-	case x.Mode != "" && x.Mode != "docker":
-		return fmt.Errorf("REPOGUARD_EXECUTOR must be empty or \"docker\", got %q", x.Mode)
-	case x.Enabled() && len(x.Repos) == 0:
-		// Fail closed: never build arbitrary repositories just because the switch was flipped.
-		return fmt.Errorf("REPOGUARD_EXECUTOR=docker requires REPOGUARD_EXECUTOR_REPOS (comma-separated globs, e.g. \"team/*,org/app\")")
+	switch x.Mode {
+	case "", "docker", "off":
+	default:
+		return fmt.Errorf("REPOGUARD_EXECUTOR must be empty, \"docker\" or \"off\", got %q", x.Mode)
 	}
+	// Fail closed regardless of mode: nothing is built until a repository is
+	// allowed via REPOGUARD_EXECUTOR_REPOS or switched on in the UI.
 	return nil
 }
 

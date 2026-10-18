@@ -38,6 +38,8 @@ import (
 
 var version = "dev" // set with -ldflags "-X main.version=..."
 
+const defaultExecutorImage = "ghcr.io/dpvinh30092005/repoguard-ci:1"
+
 func main() {
 	if len(os.Args) < 2 {
 		usage()
@@ -125,20 +127,31 @@ func serve(ctx context.Context) error {
 	q.Start(ctx)
 
 	var xq *queue.Queue
-	if x := cfg.Executor; x.Enabled() {
+	if x := cfg.Executor; !x.Disabled() {
+		missing := ""
 		for _, bin := range []string{"docker", "git"} {
 			if _, err := exec.LookPath(bin); err != nil {
-				return fmt.Errorf("REPOGUARD_EXECUTOR=docker needs %q in PATH (use deploy/executor.Dockerfile)", bin)
+				missing = bin
 			}
+		}
+		switch {
+		case missing != "" && x.Required():
+			return fmt.Errorf("REPOGUARD_EXECUTOR=docker needs %q in PATH (use deploy/executor.Dockerfile)", missing)
+		case missing != "":
+			log.Info("executor unavailable", "missing", missing)
+			goto executorDone
+		}
+		if x.Image == "" {
+			x.Image = defaultExecutorImage
 		}
 		xq = queue.New(queue.Options{Workers: x.Concurrency, Size: 200, MaxRetries: 1, JobTimeout: x.Timeout + 10*time.Minute, Logger: log, Metrics: m})
 		xq.Start(ctx)
 		eng.Executor = &executor.Executor{
-			Clients:      eng.Clients,
-			Queue:        xq,
-			AllowedRepos: x.Repos,
-			Log:          log,
-			Metrics:      m,
+			Clients: eng.Clients,
+			Queue:   xq,
+			Allow:   executor.AllowGlobs(x.Repos), // nothing is built unless allowed
+			Log:     log,
+			Metrics: m,
 			Sandbox: executor.Docker{
 				Image: x.Image, CPUs: x.CPUs, Memory: x.Memory, PidsLimit: x.PidsLimit,
 				Network: x.Network, Runtime: x.Runtime, Timeout: x.Timeout,
@@ -146,18 +159,21 @@ func serve(ctx context.Context) error {
 		}
 		log.Info("executor enabled", "repos", x.Repos, "image", x.Image, "concurrency", x.Concurrency, "runtime", x.Runtime)
 	}
+executorDone:
 
 	if cfg.SweepInterval > 0 {
 		go runSweeper(ctx, cfg.SweepInterval, eng, q, log)
 	}
 
-	srv := &server.Server{Queue: q, Handle: eng.Handle, Log: log, Metrics: m}
-	if cfg.GitHub.Enabled() {
-		srv.GitHubSecret = cfg.GitHub.WebhookSecret
-	}
-	if cfg.GitLab.Enabled() {
-		srv.GitLabSecret = cfg.GitLab.WebhookSecret
-	}
+	srv := &server.Server{Queue: q, Handle: eng.Handle, Log: log, Metrics: m, Secret: func(k platform.Kind) string {
+		switch {
+		case k == platform.GitHub && cfg.GitHub.Enabled():
+			return cfg.GitHub.WebhookSecret
+		case k == platform.GitLab && cfg.GitLab.Enabled():
+			return cfg.GitLab.WebhookSecret
+		}
+		return ""
+	}}
 	log.Info("repoguard starting", "version", version, "workers", cfg.Workers)
 	err = server.ListenAndServe(ctx, cfg.Addr, srv.Routes(), log)
 

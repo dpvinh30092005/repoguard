@@ -1,0 +1,72 @@
+{{define "content"}}
+<h1>Kết nối</h1>
+<p class="lead">Nhập thông tin một lần, repoguard tự lưu lại. Token được lưu trong file <code>data/settings.json</code> trên máy chạy repoguard.</p>
+
+<div class="card">
+  <h2>GitLab {{if .GitLab.User}}<span class="badge b-ok">Đã kết nối · @{{.GitLab.User}}</span>{{else if .GitLab.Err}}<span class="badge b-bad">Lỗi</span>{{end}}</h2>
+  {{if .GitLab.Err}}<div class="flash err">{{.GitLab.Err}}</div>{{end}}
+  {{if .Locked.gitlab}}
+    <p class="muted">Đang dùng cấu hình từ biến môi trường <code>GITLAB_URL</code> / <code>GITLAB_TOKEN</code>.</p>
+  {{else}}
+  <form method="post" action="/connect">
+    <input type="hidden" name="section" value="gitlab">
+    <label for="gl-url">Địa chỉ GitLab</label>
+    <input id="gl-url" type="url" name="gitlab_url" value="{{if .S.GitLabURL}}{{.S.GitLabURL}}{{else}}https://gitlab.com{{end}}" required>
+    <div class="hint">Ví dụ <code>https://gitlab.com</code> hoặc GitLab của công ty <code>https://gitlab.congty.vn</code>.</div>
+    <label for="gl-token">Access token</label>
+    <input id="gl-token" type="password" name="gitlab_token" autocomplete="off" placeholder="{{if .S.GitLabToken}}•••••• đã lưu — để trống nếu không đổi{{else}}glpat-...{{end}}">
+    <div class="hint">Tạo ở GitLab → avatar → <b>Preferences → Access tokens</b>, tick quyền <b>api</b>.</div>
+    <p class="row"><button type="submit">Lưu &amp; kiểm tra</button>
+    {{if .S.GitLabToken}}<button class="danger small" type="submit" name="clear" value="1">Xoá kết nối</button>{{end}}</p>
+  </form>
+  {{end}}
+</div>
+
+<div class="card">
+  <h2>GitHub {{if .GitHub.User}}<span class="badge b-ok">Đã kết nối · @{{.GitHub.User}}</span>{{else if .GitHub.Err}}<span class="badge b-bad">Lỗi</span>{{end}}</h2>
+  {{if .GitHub.Err}}<div class="flash err">{{.GitHub.Err}}</div>{{end}}
+  {{if .Locked.github}}
+    <p class="muted">Đang dùng cấu hình từ biến môi trường (GitHub App hoặc <code>GITHUB_TOKEN</code>).</p>
+  {{else}}
+  <form method="post" action="/connect">
+    <input type="hidden" name="section" value="github">
+    <label for="gh-token">Personal access token</label>
+    <input id="gh-token" type="password" name="github_token" autocomplete="off" placeholder="{{if .S.GitHubToken}}•••••• đã lưu — để trống nếu không đổi{{else}}github_pat_...{{end}}">
+    <div class="hint">GitHub → Settings → Developer settings → <b>Fine-grained tokens</b>. Quyền: Contents đọc; Pull requests, Issues, Commit statuses đọc &amp; ghi; Webhooks đọc &amp; ghi (nếu dùng webhook).</div>
+    <label for="gh-api">API URL <span class="muted">(chỉ đổi nếu dùng GitHub Enterprise)</span></label>
+    <input id="gh-api" type="url" name="github_api_url" value="{{if .S.GitHubAPIURL}}{{.S.GitHubAPIURL}}{{else}}https://api.github.com{{end}}">
+    <p class="row"><button type="submit">Lưu &amp; kiểm tra</button>
+    {{if .S.GitHubToken}}<button class="danger small" type="submit" name="clear" value="1">Xoá kết nối</button>{{end}}</p>
+  </form>
+  {{end}}
+</div>
+
+<div class="card">
+  <h2>AI review <span class="muted">(tuỳ chọn)</span> {{if .AI}}<span class="badge b-ok">Bật</span>{{end}}</h2>
+  {{if .Locked.ai}}
+    <p class="muted">Đang dùng <code>ANTHROPIC_API_KEY</code> từ biến môi trường.</p>
+  {{else}}
+  <form method="post" action="/connect">
+    <input type="hidden" name="section" value="ai">
+    <label for="ai-key">Anthropic API key</label>
+    <input id="ai-key" type="password" name="anthropic_key" autocomplete="off" placeholder="{{if .S.AnthropicKey}}•••••• đã lưu{{else}}sk-ant-...{{end}}">
+    <div class="hint">Có key thì Claude sẽ đọc diff và góp ý trên từng dòng code của MR. Không có cũng không sao.</div>
+    <p class="row"><button type="submit">Lưu</button>
+    {{if .S.AnthropicKey}}<button class="danger small" type="submit" name="clear" value="1">Tắt AI review</button>{{end}}</p>
+  </form>
+  {{end}}
+</div>
+
+<div class="card">
+  <h2>Nâng cao <span class="muted">(có thể bỏ qua)</span></h2>
+  <form method="post" action="/connect">
+    <input type="hidden" name="section" value="advanced">
+    <label for="pub">Địa chỉ công khai của repoguard</label>
+    <input id="pub" type="url" name="public_url" value="{{.S.PublicURL}}" placeholder="https://repoguard.congty.vn" {{if .Locked.public_url}}disabled{{end}}>
+    <div class="hint">Để trống: repoguard tự hỏi GitLab/GitHub mỗi 30 giây (chạy được trên máy cá nhân, không cần mở cổng). Nếu điền: repoguard tạo webhook để phản hồi ngay lập tức. Webhook secret: <code>{{.Secret}}</code></div>
+    <label for="img">Image dùng để tự chạy CI</label>
+    <input id="img" type="text" name="executor_image" value="{{.S.ExecutorImage}}" placeholder="repoguard-ci:local" {{if .Locked.image}}disabled{{end}}>
+    <p><button type="submit">Lưu</button></p>
+  </form>
+</div>
+{{end}}

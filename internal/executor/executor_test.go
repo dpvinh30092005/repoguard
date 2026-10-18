@@ -34,6 +34,9 @@ type fakeClient struct {
 }
 
 func (f *fakeClient) Kind() platform.Kind { return platform.GitLab }
+func (f *fakeClient) WebURL(platform.Repo, platform.Target) string {
+	return "https://gitlab.example/mr"
+}
 func (f *fakeClient) AuthorCanPush(context.Context, platform.Repo, *platform.ChangeRequest) (bool, error) {
 	return f.canPush, nil
 }
@@ -77,11 +80,11 @@ var repo = platform.Repo{Platform: platform.GitLab, ID: "9", FullName: "grp/app"
 
 func newExec(c *fakeClient, sb Sandbox, fetchErr error) *Executor {
 	return &Executor{
-		Clients:      map[platform.Kind]platform.Client{platform.GitLab: c},
-		Sandbox:      sb,
-		AllowedRepos: []string{"grp/*"},
-		Log:          slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Metrics:      metrics.New(),
+		Clients: platform.NewRegistry(c),
+		Sandbox: sb,
+		Allow:   AllowGlobs([]string{"grp/*"}),
+		Log:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Metrics: metrics.New(),
 		fetch: func(context.Context, platform.GitSource, string) (string, error) {
 			if fetchErr != nil {
 				return "", fetchErr

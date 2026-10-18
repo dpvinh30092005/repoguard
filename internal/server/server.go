@@ -22,22 +22,23 @@ const maxBody = 25 << 20 // GitHub caps payloads at 25 MB
 type Handler func(ctx context.Context, ev platform.Event) error
 
 type Server struct {
-	GitHubSecret string // empty = endpoint disabled
-	GitLabSecret string
-	Queue        *queue.Queue
-	Handle       Handler
-	Log          *slog.Logger
-	Metrics      *metrics.Registry
+	// Secret returns the webhook secret for a platform; "" disables its endpoint.
+	Secret  func(platform.Kind) string
+	UI      http.Handler // optional admin UI, served at "/"
+	Queue   *queue.Queue
+	Handle  Handler
+	Log     *slog.Logger
+	Metrics *metrics.Registry
 }
 
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /webhooks/github", s.webhook(platform.GitHub, func(r *http.Request, b []byte) ([]platform.Event, error) {
-		return github.ParseWebhook(r, b, s.GitHubSecret)
-	}, s.GitHubSecret != ""))
+		return github.ParseWebhook(r, b, s.Secret(platform.GitHub))
+	}))
 	mux.HandleFunc("POST /webhooks/gitlab", s.webhook(platform.GitLab, func(r *http.Request, b []byte) ([]platform.Event, error) {
-		return gitlab.ParseWebhook(r, b, s.GitLabSecret)
-	}, s.GitLabSecret != ""))
+		return gitlab.ParseWebhook(r, b, s.Secret(platform.GitLab))
+	}))
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "ok\n") })
 	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, _ *http.Request) {
 		if s.Queue.Saturated() {
@@ -50,14 +51,17 @@ func (s *Server) Routes() http.Handler {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 		s.Metrics.Write(w)
 	})
+	if s.UI != nil {
+		mux.Handle("/", s.UI)
+	}
 	return mux
 }
 
 type parser func(r *http.Request, body []byte) ([]platform.Event, error)
 
-func (s *Server) webhook(kind platform.Kind, parse parser, enabled bool) http.HandlerFunc {
+func (s *Server) webhook(kind platform.Kind, parse parser) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !enabled {
+		if s.Secret == nil || s.Secret(kind) == "" {
 			http.Error(w, string(kind)+" integration not configured", http.StatusNotFound)
 			return
 		}
