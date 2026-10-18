@@ -1,0 +1,99 @@
+# Reusable workflow: the "heavy" half of repoguard, run on the CALLER's runners.
+# Consumers add 4 lines (see ci-templates/github/repoguard.yml):
+#
+#   jobs:
+#     repoguard:
+#       uses: example/repoguard/.github/workflows/repoguard-ci.yml@v1
+name: repoguard ci
+
+on:
+  workflow_call:
+    inputs:
+      repoguard-version:
+        description: Module version to install (tag, or "latest"). Ignored when repoguard-source is set.
+        type: string
+        default: latest
+      repoguard-source:
+        description: Build repoguard from this path in the checkout instead (used by repoguard itself).
+        type: string
+        default: ""
+      osv-scanner-version:
+        type: string
+        default: latest
+      go-version:
+        type: string
+        default: stable
+      node-version:
+        type: string
+        default: "22"
+      python-version:
+        type: string
+        default: "3.12"
+      changed-only:
+        description: On pull requests, only check projects changed against the base branch.
+        type: boolean
+        default: true
+      args:
+        description: Extra arguments for `repoguard ci` (e.g. "--no-vuln --stages lint,test").
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  repoguard:
+    name: repoguard ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # needed for --base diffs
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ inputs.go-version }}
+          cache: false # caller repos may not be Go; avoids "go.sum not found" warnings
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      - name: Install repoguard and scanners
+        env:
+          RG_VERSION: ${{ inputs.repoguard-version }}
+          RG_SOURCE: ${{ inputs.repoguard-source }}
+          OSV_VERSION: ${{ inputs.osv-scanner-version }}
+        run: |
+          if [ -n "$RG_SOURCE" ]; then
+            (cd "$RG_SOURCE" && go build -o "$(go env GOPATH)/bin/repoguard" ./cmd/repoguard)
+          else
+            go install "github.com/example/repoguard/cmd/repoguard@${RG_VERSION}"
+          fi
+          go install "github.com/google/osv-scanner/v2/cmd/osv-scanner@${OSV_VERSION}"
+          python -m pip install --quiet ruff pytest
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Run checks
+        env:
+          BASE: ${{ inputs.changed-only && github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || '' }}
+          ARGS: ${{ inputs.args }}
+        run: |
+          # shellcheck disable=SC2086 # ARGS is intentionally word-split
+          repoguard ci ${BASE:+--base "$BASE"} $ARGS
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: repoguard-report
+          path: |
+            repoguard-report.md
+            repoguard-junit.xml
+          if-no-files-found: ignore
+          retention-days: 14

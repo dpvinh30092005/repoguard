@@ -1,0 +1,71 @@
+# .repoguard.yml — put it on the DEFAULT branch of a repository.
+# Every key is optional: only write what differs from these defaults.
+# repoguard reads it from the default branch, so a PR cannot weaken its own checks.
+
+pull_request:
+  enabled: true
+  skip_drafts: true
+  # Conventional Commits by default.
+  title_pattern: '^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([\w./-]+\))?!?: .{3,}'
+  require_description: true
+  min_description_length: 20      # HTML comments from the PR template don't count
+  require_linked_issue: true      # "Closes #12", an issue URL, or branch "feature/12-..."
+  max_changed_lines: 600          # warning only
+  max_changed_files: 40           # warning only
+
+secrets:
+  enabled: true
+  ignore_paths: ["**/testdata/**"]  # or add "repoguard:allow" on a line
+
+ai_review:
+  enabled: true                   # needs ANTHROPIC_API_KEY on the service
+  max_comments: 15
+  max_diff_bytes: 300000          # files over budget are listed as "not reviewed"
+  fail_on_critical: false         # advisory by default; true = critical findings fail the status
+  ignore_paths: ["*.lock", "package-lock.json", "go.sum", "vendor/**", "dist/**", "*.min.js", "*.snap"]
+  instructions: |
+    We use PostgreSQL via sqlc; flag raw SQL string building.
+    Public HTTP handlers must validate input with the `validate` package.
+
+issues:
+  enabled: true
+  bug_labels: [bug]
+  required_sections: ["Steps to reproduce", "Expected", "Actual"]
+  needs_info_label: needs-info
+  auto_labels:                    # label: keywords (matched as words in title + body)
+    bug: [bug, crash, error, exception, broken, fails, lỗi]
+    enhancement: ["feature request", "would be nice", "support for", "tính năng"]
+    question: ["how do i", "how to", question]
+  duplicates:
+    enabled: true
+    threshold: 0.55               # TF-IDF cosine similarity
+    label: possible-duplicate
+  stale:
+    enabled: true
+    days_until_stale: 60
+    days_until_close: 14          # 0 = only label, never close
+    label: stale
+    exempt_labels: [pinned, security, roadmap]
+  sla:
+    enabled: true
+    labels: [critical, priority/critical, P0]
+    hours_without_assignee: 24
+  link:
+    enabled: true
+    in_progress_label: in-progress
+    close_on_merge: true          # also for merges into non-default branches
+
+# Used by `repoguard ci` inside your pipeline.
+ci:
+  fail_on_vulns: true
+  secrets_scan: true
+  max_depth: 3                    # how deep to look for go.mod / package.json / pyproject.toml
+  ignore_paths: ["**/testdata/**", "examples/**"]
+  # Declare projects explicitly to override detection / commands:
+  # projects:
+  #   - path: services/api
+  #     type: node
+  #     commands: { test: "npm run test:ci" }
+  #   - path: tools/legacy
+  #     type: custom
+  #     commands: { build: "make", test: "make check" }

@@ -1,0 +1,18 @@
+# Copy to .github/workflows/repoguard.yml in any repository.
+# Pair it with the repoguard GitHub App for PR rules, secret scan, AI review and issue triage.
+name: repoguard
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  repoguard:
+    uses: example/repoguard/.github/workflows/repoguard-ci.yml@v1
+    # with:
+    #   args: "--stages lint,test"   # e.g. skip install/build
+    #   changed-only: false          # check every project on PRs too

@@ -1,0 +1,12 @@
+# Local / single-host deployment. Expose port 8080 behind TLS (Caddy, nginx, a cloud LB).
+services:
+  repoguard:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    env_file: .env
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+    read_only: true
+    # Probes: GET /healthz (liveness), /readyz (queue not saturated), /metrics (Prometheus).

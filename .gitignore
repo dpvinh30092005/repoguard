@@ -1,0 +1,8 @@
+bin/
+coverage.out
+repoguard-report.md
+repoguard-junit.xml
+deploy/.env
+*.pem
+.idea/
+.vscode/

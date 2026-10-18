@@ -1,0 +1,37 @@
+# Include from any project's .gitlab-ci.yml:
+#
+#   include:
+#     - project: platform/repoguard          # or: remote: https://.../repoguard.gitlab-ci.yml
+#       ref: v1
+#       file: ci-templates/gitlab/repoguard.gitlab-ci.yml
+#
+# Results show in the MR widget (JUnit) and as a pipeline status the
+# repoguard service references in its summary comment.
+
+variables:
+  REPOGUARD_IMAGE: ghcr.io/example/repoguard-ci:1
+  REPOGUARD_ARGS: ""
+
+repoguard:
+  stage: test
+  image: $REPOGUARD_IMAGE
+  variables:
+    GIT_DEPTH: "0" # full history for --base diffs
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  script:
+    - |
+      if [ -n "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" ]; then
+        git fetch --quiet origin "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
+        repoguard ci --base "origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" $REPOGUARD_ARGS
+      else
+        repoguard ci $REPOGUARD_ARGS
+      fi
+  artifacts:
+    when: always
+    expire_in: 2 weeks
+    paths:
+      - repoguard-report.md
+    reports:
+      junit: repoguard-junit.xml
