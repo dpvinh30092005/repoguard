@@ -92,6 +92,27 @@ type CI struct {
 	SecretsScan bool        `yaml:"secrets_scan"`
 	MaxDepth    int         `yaml:"max_depth"`
 	IgnorePaths []string    `yaml:"ignore_paths"`
+	Postman     Postman     `yaml:"postman"`
+	Sonar       Sonar       `yaml:"sonar"`
+}
+
+// Postman runs API test collections with Newman after the build.
+type Postman struct {
+	Enabled     bool     `yaml:"enabled"`
+	Collections []string `yaml:"collections"` // globs; empty = every *.postman_collection.json
+	Environment string   `yaml:"environment"` // *.postman_environment.json
+	Start       string   `yaml:"start"`       // command that starts the API under test (runs in background)
+	WaitURL     string   `yaml:"wait_url"`    // wait until this URL answers before testing
+	WaitSeconds int      `yaml:"wait_seconds"`
+}
+
+// Sonar runs sonar-scanner and reports the SonarQube quality gate.
+// The server URL and token come from SONAR_HOST_URL / SONAR_TOKEN.
+type Sonar struct {
+	Enabled    bool     `yaml:"enabled"`     // runs only when SONAR_HOST_URL and SONAR_TOKEN are set
+	ProjectKey string   `yaml:"project_key"` // default: derived from the repository name
+	Args       []string `yaml:"args"`        // extra -Dkey=value arguments
+	FailOnGate bool     `yaml:"fail_on_gate"`
 }
 
 type CIProject struct {
@@ -141,7 +162,11 @@ func Default() Repo {
 			SLA:  SLA{Enabled: true, Labels: []string{"critical", "priority/critical", "P0"}, HoursWithoutAssignee: 24},
 			Link: Link{Enabled: true, InProgressLabel: "in-progress", CloseOnMerge: true},
 		},
-		CI: CI{FailOnVulns: true, SecretsScan: true, MaxDepth: 3, IgnorePaths: []string{"**/testdata/**"}},
+		CI: CI{
+			FailOnVulns: true, SecretsScan: true, MaxDepth: 3, IgnorePaths: []string{"**/testdata/**"},
+			Postman: Postman{Enabled: true, WaitSeconds: 60},
+			Sonar:   Sonar{Enabled: true, FailOnGate: true},
+		},
 	}
 }
 

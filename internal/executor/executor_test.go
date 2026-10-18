@@ -63,10 +63,12 @@ type fakeSandbox struct {
 	err     error
 	calls   int
 	sawFile map[string]string // files present in srcDir when Run was called
+	sawEnv  map[string]string
 }
 
-func (s *fakeSandbox) Run(_ context.Context, dir string) (Result, error) {
+func (s *fakeSandbox) Run(_ context.Context, dir string, env map[string]string) (Result, error) {
 	s.calls++
+	s.sawEnv = env
 	s.sawFile = map[string]string{}
 	entries, _ := os.ReadDir(dir)
 	for _, e := range entries {
@@ -120,8 +122,13 @@ func cr() *platform.ChangeRequest {
 func TestRunReportsPassAndPinsPolicy(t *testing.T) {
 	c := &fakeClient{canPush: true, policy: "ci:\n  fail_on_vulns: true\n"}
 	sb := &fakeSandbox{res: Result{Report: reportJSON(t, false)}}
-	if err := newExec(c, sb, nil).Run(context.Background(), repo, cr()); err != nil {
+	x := newExec(c, sb, nil)
+	x.Env = map[string]string{"SONAR_TOKEN": "squ_x"}
+	if err := x.Run(context.Background(), repo, cr()); err != nil {
 		t.Fatal(err)
+	}
+	if sb.sawEnv["REPOGUARD_REPO"] != "grp/app" || sb.sawEnv["SONAR_TOKEN"] != "squ_x" {
+		t.Errorf("sandbox env = %v", sb.sawEnv)
 	}
 	if got := sb.sawFile[config.FileName]; got != c.policy {
 		t.Errorf("sandbox saw policy %q, want the default-branch one", got)
@@ -268,14 +275,17 @@ func TestFetchFromRealRepo(t *testing.T) {
 
 func TestDockerCreateArgsAreLockedDown(t *testing.T) {
 	d := Docker{Image: "img:1", CPUs: "2", Memory: "4g", PidsLimit: 512, Network: "bridge", Runtime: "runsc"}
-	args := strings.Join(d.CreateArgs("rg-1"), " ")
+	args := strings.Join(d.CreateArgs("rg-1", []string{"SONAR_TOKEN"}), " ")
+	if !strings.Contains(args, "--env SONAR_TOKEN ") || strings.Contains(args, "SONAR_TOKEN=") {
+		t.Errorf("env must be passed by name only: %s", args)
+	}
 	for _, want := range []string{"--cpus 2", "--memory 4g --memory-swap 4g", "--pids-limit 512", "--cap-drop ALL",
 		"--security-opt no-new-privileges", "--runtime runsc", "img:1 repoguard ci --dir /work --json " + ReportFile} {
 		if !strings.Contains(args, want) {
 			t.Errorf("missing %q in: %s", want, args)
 		}
 	}
-	for _, banned := range []string{"-v ", "--volume", "--mount", "--privileged", "TOKEN", "docker.sock"} {
+	for _, banned := range []string{"-v ", "--volume", "--mount", "--privileged", "=squ_", "docker.sock"} {
 		if strings.Contains(args, banned) {
 			t.Errorf("sandbox args must not contain %q: %s", banned, args)
 		}

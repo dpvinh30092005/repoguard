@@ -1,0 +1,76 @@
+# repoguard + SonarQube + Jenkins, ready to try on one machine.
+#
+#   cp deploy/stack/.env.example deploy/stack/.env      # fill in GitLab token etc.
+#   docker compose -f deploy/stack/docker-compose.yml up -d --build
+#   deploy/stack/init-sonar.sh                           # once: prints SONAR_TOKEN for .env
+#
+# repoguard  http://localhost:8080   (web UI / webhooks)
+# SonarQube  http://localhost:9000
+# Jenkins    http://localhost:8081
+#
+# Demo settings (embedded SonarQube DB, builds on the Jenkins controller,
+# Docker socket mounted into repoguard). Not a production layout.
+name: repoguard-stack
+
+services:
+  repoguard:
+    build:
+      context: ../..
+      dockerfile: deploy/executor.Dockerfile
+    env_file: .env
+    environment:
+      REPOGUARD_EXECUTOR: ${REPOGUARD_EXECUTOR:-jenkins}
+      JENKINS_URL: http://jenkins:8080
+      JENKINS_USER: ${JENKINS_ADMIN_USER:-admin}
+      JENKINS_TOKEN: ${JENKINS_ADMIN_PASSWORD}
+      SONAR_HOST_URL: http://sonarqube:9000
+      REPOGUARD_EXECUTOR_NETWORK: repoguard-stack   # docker sandbox can reach sonarqube
+      REPOGUARD_DATA_DIR: /data
+    ports:
+      - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - repoguard-data:/data
+    depends_on: [jenkins, sonarqube]
+    restart: unless-stopped
+
+  jenkins:
+    build:
+      context: ../..
+      dockerfile: deploy/stack/jenkins/Dockerfile
+    environment:
+      JENKINS_ADMIN_USER: ${JENKINS_ADMIN_USER:-admin}
+      JENKINS_ADMIN_PASSWORD: ${JENKINS_ADMIN_PASSWORD}
+      GIT_USERNAME: ${GIT_USERNAME:-oauth2}
+      GIT_TOKEN: ${GITLAB_TOKEN:-unset}
+      SONAR_HOST_URL: http://sonarqube:9000
+      SONAR_TOKEN: ${SONAR_TOKEN:-}
+      JENKINS_PUBLIC_URL: http://localhost:8081/
+    ports:
+      - "8081:8080"
+    volumes:
+      - jenkins-home:/var/jenkins_home
+    restart: unless-stopped
+
+  sonarqube:
+    image: sonarqube:community
+    environment:
+      SONAR_ES_BOOTSTRAP_CHECKS_DISABLE: "true"   # demo: skip the vm.max_map_count check
+    ports:
+      - "9000:9000"
+    volumes:
+      - sonar-data:/opt/sonarqube/data
+      - sonar-extensions:/opt/sonarqube/extensions
+      - sonar-logs:/opt/sonarqube/logs
+    restart: unless-stopped
+
+networks:
+  default:
+    name: repoguard-stack
+
+volumes:
+  repoguard-data:
+  jenkins-home:
+  sonar-data:
+  sonar-extensions:
+  sonar-logs:

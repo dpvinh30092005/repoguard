@@ -56,6 +56,86 @@ jobs:
           msg=$(tail -c 50000 integration.log | sed -e 's/%/%25/g' -e 's/\r/%0D/g' | awk '{printf "%s%%0A", $0}')
           echo "::error title=integration test output::${msg}"
 
+  # The demo stack for real: SonarQube analyses a project, Jenkins builds
+  # monorepo-ci through repoguard's Jenkins backend (incl. Postman + Sonar).
+  stack-integration:
+    name: stack (real sonarqube + jenkins)
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    env:
+      COMPOSE: docker compose -f deploy/stack/docker-compose.yml
+      JENKINS_ADMIN_PASSWORD: ci-admin-password
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Start SonarQube
+        run: |
+          touch deploy/stack/.env
+          $COMPOSE up -d sonarqube
+      - name: Build CI runner image
+        run: docker build -f deploy/ci-runner.Dockerfile -t repoguard-ci:test .
+      - name: Initialise SonarQube
+        id: sonar
+        run: |
+          token=$(deploy/stack/init-sonar.sh http://localhost:9000)
+          echo "::add-mask::$token"
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+      - name: sonar-scanner analyses a sample project
+        env:
+          SONAR_TOKEN: ${{ steps.sonar.outputs.token }}
+        run: |
+          set -o pipefail
+          mkdir -p /tmp/sample && cd /tmp/sample
+          printf 'module sample\n\ngo 1.22\n' > go.mod
+          printf 'package sample\n\nfunc Sum(a, b int) int { return a + b }\n' > sum.go
+          printf 'package sample\n\nimport "testing"\n\nfunc TestSum(t *testing.T) {\n\tif Sum(1, 2) != 3 {\n\t\tt.Fatal("bad")\n\t}\n}\n' > sum_test.go
+          docker run --rm --network repoguard-stack -e SONAR_HOST_URL=http://sonarqube:9000 -e SONAR_TOKEN \
+            -e REPOGUARD_REPO=ci/sample -v /tmp/sample:/work repoguard-ci:test \
+            repoguard ci --dir /work --json /work/report.json --report "" --junit "" --no-vuln 2>&1 | tee /tmp/sonar.log || true
+          jq '.sonar' report.json
+          test "$(jq -r '.sonar.ran' report.json)" = true
+          test -z "$(jq -r '.sonar.error // empty' report.json)"
+          jq -e '.sonar.gate | IN("OK","ERROR","WARN")' report.json
+      - name: Start Jenkins
+        env:
+          SONAR_TOKEN: ${{ steps.sonar.outputs.token }}
+          GIT_USERNAME: x-access-token
+          GITLAB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Jenkins' git credential (clones a public repo)
+        run: |
+          $COMPOSE up -d --build jenkins
+          for i in $(seq 1 90); do
+            curl -fsS -u "admin:$JENKINS_ADMIN_PASSWORD" http://localhost:8081/job/repoguard-ci/api/json > /dev/null 2>&1 && exit 0
+            sleep 5
+          done
+          echo "Jenkins job did not appear" >&2; exit 1
+      - name: Jenkins builds monorepo-ci via the executor backend
+        run: |
+          set -o pipefail
+          git clone -q --depth 1 https://github.com/dpvinh30092005/monorepo-ci /tmp/mono
+          REPOGUARD_TEST_JENKINS_URL=http://localhost:8081 \
+          REPOGUARD_TEST_JENKINS_USER=admin \
+          REPOGUARD_TEST_JENKINS_TOKEN="$JENKINS_ADMIN_PASSWORD" \
+          REPOGUARD_TEST_REPO_NAME=dpvinh30092005/monorepo-ci \
+          REPOGUARD_TEST_REPO_URL=https://github.com/dpvinh30092005/monorepo-ci.git \
+          REPOGUARD_TEST_REPO_REF=refs/heads/main \
+          REPOGUARD_TEST_REPO_SHA="$(git -C /tmp/mono rev-parse HEAD)" \
+          REPOGUARD_TEST_POLICY_FILE=/tmp/mono/.repoguard.yml \
+          REPOGUARD_TEST_EXPECT_SONAR=1 \
+            go test -tags integration -run TestJenkinsRealServer -v -timeout 35m ./internal/executor/ 2>&1 | tee /tmp/jenkins.log
+      - name: Surface diagnostics as annotations
+        if: failure()
+        run: |
+          # Annotations are readable through the checks API even where raw logs are not.
+          note() { msg=$(tail -c 30000 "$2" 2>/dev/null | sed -e 's/%/%25/g' -e 's/\r/%0D/g' | awk '{printf "%s%%0A", $0}'); echo "::error title=$1::${msg}"; }
+          $COMPOSE logs --no-color --tail 150 jenkins > /tmp/jenkins-container.log 2>&1 || true
+          $COMPOSE logs --no-color --tail 80 sonarqube > /tmp/sonar-container.log 2>&1 || true
+          note "sonar step" /tmp/sonar.log
+          note "jenkins test" /tmp/jenkins.log
+          note "jenkins container" /tmp/jenkins-container.log
+          note "sonarqube container" /tmp/sonar-container.log
+
   # Dogfooding: repoguard checks itself with the same reusable workflow consumers use.
   self-check:
     uses: ./.github/workflows/repoguard-ci.yml

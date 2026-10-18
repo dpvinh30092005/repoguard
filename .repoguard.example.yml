@@ -61,6 +61,20 @@ ci:
   secrets_scan: true
   max_depth: 3                    # how deep to look for go.mod / package.json / pyproject.toml
   ignore_paths: ["**/testdata/**", "examples/**"]
+  # API tests: every *.postman_collection.json is run with Newman after the build.
+  postman:
+    enabled: true
+    # collections: ["api/postman/*.postman_collection.json"]   # default: all collections
+    environment: api/postman/local.postman_environment.json
+    start: npm --prefix api start          # start the API under test (background)
+    wait_url: http://127.0.0.1:3000/health # wait until it answers
+    wait_seconds: 60
+  # SonarQube: runs when SONAR_HOST_URL and SONAR_TOKEN are set in the build environment.
+  sonar:
+    enabled: true
+    # project_key: my-app                  # default: derived from the repository path
+    fail_on_gate: true                     # a failed Quality Gate fails the build
+    # args: ["-Dsonar.go.coverage.reportPaths=coverage.out"]
   # Declare projects explicitly to override detection / commands:
   # projects:
   #   - path: services/api

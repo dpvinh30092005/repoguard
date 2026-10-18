@@ -9,7 +9,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"sort"
 	"strconv"
 	"time"
 )
@@ -23,11 +25,14 @@ type Result struct {
 	Logs     string // tail of combined stdout/stderr
 	ExitCode int
 	TimedOut bool
+	Backend  string // set by remote backends, e.g. "Jenkins #12"
+	URL      string // link to the remote build
 }
 
 // Sandbox runs `repoguard ci` against a source directory in isolation.
+// env holds the only variables the build may see (e.g. SONAR_TOKEN).
 type Sandbox interface {
-	Run(ctx context.Context, srcDir string) (Result, error)
+	Run(ctx context.Context, srcDir string, env map[string]string) (Result, error)
 }
 
 // Docker runs each job in a fresh, resource-limited container that is
@@ -52,9 +57,11 @@ func (d Docker) bin() string {
 	return d.Bin
 }
 
-// CreateArgs builds `docker create` arguments. No host env, mounts or secrets
-// are passed: the container sees only the copied sources.
-func (d Docker) CreateArgs(name string) []string {
+// CreateArgs builds `docker create` arguments. No mounts and no host env: the
+// container sees the copied sources plus the named variables, which are
+// passed as `--env NAME` (value taken from the docker CLI's environment) so
+// secret values never appear in argv.
+func (d Docker) CreateArgs(name string, envNames []string) []string {
 	args := []string{
 		"create", "--name", name,
 		"--label", "repoguard.executor=1",
@@ -68,6 +75,9 @@ func (d Docker) CreateArgs(name string) []string {
 		"--env", "CI=true",
 		"--env", "HOME=/tmp",
 	}
+	for _, n := range envNames {
+		args = append(args, "--env", n)
+	}
 	if d.Runtime != "" {
 		args = append(args, "--runtime", d.Runtime)
 	}
@@ -75,9 +85,19 @@ func (d Docker) CreateArgs(name string) []string {
 		"repoguard", "ci", "--dir", "/work", "--json", ReportFile, "--report", "", "--junit", "")
 }
 
-func (d Docker) Run(ctx context.Context, srcDir string) (Result, error) {
+func (d Docker) Run(ctx context.Context, srcDir string, env map[string]string) (Result, error) {
 	name := "repoguard-" + randomID()
-	if out, err := d.cmd(ctx, d.CreateArgs(name)...).CombinedOutput(); err != nil {
+	names := make([]string, 0, len(env))
+	for k := range env {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	create := d.cmd(ctx, d.CreateArgs(name, names)...)
+	create.Env = os.Environ()
+	for _, k := range names {
+		create.Env = append(create.Env, k+"="+env[k])
+	}
+	if out, err := create.CombinedOutput(); err != nil {
 		return Result{}, fmt.Errorf("docker create: %v: %s", err, bytes.TrimSpace(out))
 	}
 	defer func() {

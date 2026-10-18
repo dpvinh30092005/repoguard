@@ -1,0 +1,53 @@
+# Jenkins configuration-as-code for the repoguard demo stack.
+jenkins:
+  systemMessage: "repoguard demo stack: builds run on the controller. Use agents in production."
+  numExecutors: 2
+  securityRealm:
+    local:
+      allowsSignup: false
+      users:
+        - id: "${JENKINS_ADMIN_USER:-admin}"
+          password: "${JENKINS_ADMIN_PASSWORD}"
+  authorizationStrategy:
+    loggedInUsersCanDoAnything:
+      allowAnonymousRead: false
+  globalNodeProperties:
+    - envVars:
+        env:
+          # Lets `repoguard ci` inside the job analyse with SonarQube.
+          - key: SONAR_HOST_URL
+            value: "${SONAR_HOST_URL:-}"
+          - key: SONAR_TOKEN
+            value: "${SONAR_TOKEN:-}"
+credentials:
+  system:
+    domainCredentials:
+      - credentials:
+          - usernamePassword:
+              scope: GLOBAL
+              id: repoguard-git
+              description: "Read access to the repositories repoguard builds"
+              username: "${GIT_USERNAME:-oauth2}"
+              password: "${GIT_TOKEN:-unset}"
+unclassified:
+  location:
+    url: "${JENKINS_PUBLIC_URL:-http://localhost:8081/}"
+jobs:
+  - script: |
+      pipelineJob('repoguard-ci') {
+        description('Builds merge requests for repoguard. Script: ci-templates/jenkins/Jenkinsfile')
+        parameters {
+          stringParam('REPO_URL', '', 'HTTPS clone URL (no credentials)')
+          stringParam('GIT_REF', '', 'e.g. refs/merge-requests/7/head')
+          stringParam('GIT_SHA', '', 'commit that must be built')
+          stringParam('REPO_NAME', '', 'group/project')
+          stringParam('MR_NUMBER', '', 'merge/pull request number')
+          textParam('REPOGUARD_POLICY', '', 'base64 of .repoguard.yml from the default branch')
+        }
+        definition {
+          cps {
+            script(new File('/usr/share/jenkins/ref/repoguard/Jenkinsfile').text)
+            sandbox()
+          }
+        }
+      }

@@ -126,40 +126,14 @@ func serve(ctx context.Context) error {
 	q := queue.New(queue.Options{Workers: cfg.Workers, Size: cfg.QueueSize, MaxRetries: 4, Logger: log, Metrics: m})
 	q.Start(ctx)
 
-	var xq *queue.Queue
-	if x := cfg.Executor; !x.Disabled() {
-		missing := ""
-		for _, bin := range []string{"docker", "git"} {
-			if _, err := exec.LookPath(bin); err != nil {
-				missing = bin
-			}
-		}
-		switch {
-		case missing != "" && x.Required():
-			return fmt.Errorf("REPOGUARD_EXECUTOR=docker needs %q in PATH (use deploy/executor.Dockerfile)", missing)
-		case missing != "":
-			log.Info("executor unavailable", "missing", missing)
-			goto executorDone
-		}
-		if x.Image == "" {
-			x.Image = defaultExecutorImage
-		}
-		xq = queue.New(queue.Options{Workers: x.Concurrency, Size: 200, MaxRetries: 1, JobTimeout: x.Timeout + 10*time.Minute, Logger: log, Metrics: m})
-		xq.Start(ctx)
-		eng.Executor = &executor.Executor{
-			Clients: eng.Clients,
-			Queue:   xq,
-			Allow:   executor.AllowGlobs(x.Repos), // nothing is built unless allowed
-			Log:     log,
-			Metrics: m,
-			Sandbox: executor.Docker{
-				Image: x.Image, CPUs: x.CPUs, Memory: x.Memory, PidsLimit: x.PidsLimit,
-				Network: x.Network, Runtime: x.Runtime, Timeout: x.Timeout,
-			},
-		}
-		log.Info("executor enabled", "repos", x.Repos, "image", x.Image, "concurrency", x.Concurrency, "runtime", x.Runtime)
+	x, xq, err := newExecutor(cfg.Executor, eng, log, m)
+	if err != nil {
+		return err
 	}
-executorDone:
+	if x != nil {
+		xq.Start(ctx)
+		eng.Executor = x
+	}
 
 	if cfg.SweepInterval > 0 {
 		go runSweeper(ctx, cfg.SweepInterval, eng, q, log)
@@ -192,6 +166,48 @@ executorDone:
 		return nil
 	}
 	return err
+}
+
+// newExecutor builds the CI executor: Jenkins when configured, else a local
+// Docker sandbox if Docker is available. It returns nil when there is neither.
+func newExecutor(cfg config.Executor, eng *engine.Engine, log *slog.Logger, m *metrics.Registry) (*executor.Executor, *queue.Queue, error) {
+	if cfg.Disabled() {
+		return nil, nil, nil
+	}
+	x := &executor.Executor{
+		Clients: eng.Clients,
+		Allow:   executor.AllowGlobs(cfg.Repos), // nothing is built unless allowed
+		Log:     log,
+		Metrics: m,
+	}
+	if cfg.UseJenkins() {
+		j := cfg.Jenkins
+		x.Remote = &executor.Jenkins{URL: j.URL, User: j.User, Token: j.Token, Job: j.Job, Timeout: cfg.Timeout}
+		log.Info("executor enabled (jenkins)", "url", j.URL, "job", j.Job, "repos", cfg.Repos)
+	} else {
+		for _, bin := range []string{"docker", "git"} {
+			if _, err := exec.LookPath(bin); err != nil {
+				if cfg.Required() {
+					return nil, nil, fmt.Errorf("REPOGUARD_EXECUTOR=docker needs %q in PATH (use deploy/executor.Dockerfile)", bin)
+				}
+				log.Info("executor unavailable", "missing", bin)
+				return nil, nil, nil
+			}
+		}
+		if cfg.Image == "" {
+			cfg.Image = defaultExecutorImage
+		}
+		x.Sandbox = executor.Docker{
+			Image: cfg.Image, CPUs: cfg.CPUs, Memory: cfg.Memory, PidsLimit: cfg.PidsLimit,
+			Network: cfg.Network, Runtime: cfg.Runtime, Timeout: cfg.Timeout,
+		}
+		if s := cfg.Sonar; s.HostURL != "" && s.Token != "" {
+			x.Env = map[string]string{"SONAR_HOST_URL": s.HostURL, "SONAR_TOKEN": s.Token}
+		}
+		log.Info("executor enabled (docker)", "repos", cfg.Repos, "image", cfg.Image, "concurrency", cfg.Concurrency, "sonar", x.Env != nil)
+	}
+	x.Queue = queue.New(queue.Options{Workers: cfg.Concurrency, Size: 200, MaxRetries: 1, JobTimeout: cfg.Timeout + 10*time.Minute, Logger: log, Metrics: m})
+	return x, x.Queue, nil
 }
 
 // runSweeper enqueues one sweep job per repository every interval.

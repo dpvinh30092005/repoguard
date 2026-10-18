@@ -39,6 +39,11 @@ type Executor struct {
 	Log      *slog.Logger
 	Metrics  *metrics.Registry
 	Activity *activity.Log // optional: feeds the web UI
+	// Env is passed into every build (e.g. SONAR_HOST_URL, SONAR_TOKEN). Keep it
+	// to low-privilege tokens: trusted authors' code runs with access to it.
+	Env map[string]string
+	// Remote, when set, builds on an external CI system (e.g. Jenkins) instead of the local sandbox.
+	Remote Remote
 
 	fetch func(ctx context.Context, src platform.GitSource, sha string) (string, error)
 }
@@ -101,32 +106,17 @@ func (x *Executor) Run(ctx context.Context, repo platform.Repo, cr *platform.Cha
 	if err != nil {
 		return err
 	}
-	fetchFn := x.fetch
-	if fetchFn == nil {
-		fetchFn = fetch
-	}
-	dir, err := fetchFn(ctx, src, cr.HeadSHA)
+	log.Info("executor: running", "remote", x.Remote != nil)
+	res, err := x.build(ctx, c, repo, cr, src)
 	if errors.Is(err, ErrStale) {
 		log.Info("executor: head moved, skipping stale run")
 		return nil
 	}
 	if err != nil {
-		_ = x.setStatus(ctx, c, repo, cr, platform.StateError, "Could not fetch sources")
-		return err
-	}
-	defer os.RemoveAll(dir)
-
-	if err := pinPolicy(ctx, c, repo, dir); err != nil {
-		return err
-	}
-
-	log.Info("executor: running")
-	res, err := x.Sandbox.Run(ctx, dir)
-	if err != nil {
 		x.count("sandbox_error")
 		record("error", err.Error())
-		_ = x.setStatus(ctx, c, repo, cr, platform.StateError, "Sandbox error")
-		_ = c.UpsertComment(ctx, repo, target, Marker, fmt.Sprintf("%s\n### 🧪 repoguard ci\n⚠️ The sandbox failed before the build could run: `%v`. A maintainer should check the repoguard logs.", Marker, err))
+		_ = x.setStatus(ctx, c, repo, cr, platform.StateError, "Build backend error")
+		_ = c.UpsertComment(ctx, repo, target, Marker, fmt.Sprintf("%s\n### 🧪 repoguard ci\n⚠️ The build could not run: `%v`. A maintainer should check the repoguard logs.", Marker, err))
 		return err
 	}
 
@@ -144,29 +134,68 @@ func (x *Executor) Run(ctx context.Context, repo platform.Repo, cr *platform.Cha
 	return c.UpsertComment(ctx, repo, target, Marker, body)
 }
 
-// pinPolicy replaces the checkout's .repoguard.yml with the default branch's,
-// so a change request cannot loosen its own CI policy.
-func pinPolicy(ctx context.Context, c platform.Client, repo platform.Repo, dir string) error {
+// build runs `repoguard ci` for the change request on the remote backend, or
+// fetches the sources and runs them in the local sandbox.
+func (x *Executor) build(ctx context.Context, c platform.Client, repo platform.Repo, cr *platform.ChangeRequest, src platform.GitSource) (Result, error) {
+	policy, err := defaultPolicy(ctx, c, repo)
+	if err != nil {
+		return Result{}, err
+	}
+	env := map[string]string{"REPOGUARD_REPO": repo.FullName}
+	for k, v := range x.Env {
+		env[k] = v
+	}
+	if x.Remote != nil {
+		return x.Remote.Build(ctx, RemoteBuild{Repo: repo, CR: cr, CloneURL: src.URL, Ref: src.Ref, SHA: cr.HeadSHA, Policy: policy})
+	}
+
+	fetchFn := x.fetch
+	if fetchFn == nil {
+		fetchFn = fetch
+	}
+	dir, err := fetchFn(ctx, src, cr.HeadSHA)
+	if err != nil {
+		return Result{}, err
+	}
+	defer os.RemoveAll(dir)
+	if err := pinPolicy(dir, policy); err != nil {
+		return Result{}, err
+	}
+	return x.Sandbox.Run(ctx, dir, env)
+}
+
+// defaultPolicy returns .repoguard.yml from the default branch (nil if absent).
+// Builds always use it, so a change request cannot loosen its own CI policy.
+func defaultPolicy(ctx context.Context, c platform.Client, repo platform.Repo) ([]byte, error) {
 	branch := repo.DefaultBranch
 	if branch == "" {
 		branch = "main"
 	}
-	path := filepath.Join(dir, config.FileName)
 	data, err := c.GetFile(ctx, repo, branch, config.FileName)
-	switch {
-	case errors.Is(err, platform.ErrNotFound):
-		if rmErr := os.Remove(path); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
-			return rmErr
+	if errors.Is(err, platform.ErrNotFound) {
+		return nil, nil
+	}
+	return data, err
+}
+
+// pinPolicy replaces the checkout's .repoguard.yml with the default branch's.
+func pinPolicy(dir string, policy []byte) error {
+	path := filepath.Join(dir, config.FileName)
+	if policy == nil {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
 		}
 		return nil
-	case err != nil:
-		return err
 	}
-	return os.WriteFile(path, data, 0o644)
+	return os.WriteFile(path, policy, 0o644)
 }
 
 func outcome(cr *platform.ChangeRequest, res Result) (platform.State, string, string) {
-	header := fmt.Sprintf("%s\n### 🧪 repoguard ci · commit %s\n<sub>Run by the repoguard executor because this project's own pipelines are disabled.</sub>\n\n", Marker, short(cr.HeadSHA))
+	where := "Run by the repoguard executor because this project's own pipelines are disabled."
+	if res.URL != "" {
+		where = fmt.Sprintf("Built on [%s](%s) by the repoguard executor.", res.Backend, res.URL)
+	}
+	header := fmt.Sprintf("%s\n### 🧪 repoguard ci · commit %s\n<sub>%s</sub>\n\n", Marker, short(cr.HeadSHA), where)
 	logs := func() string {
 		return "<details><summary>Build log (tail)</summary>\n\n```\n" + strings.TrimSpace(res.Logs) + "\n```\n</details>\n"
 	}

@@ -13,6 +13,7 @@ Repo nào "connect" (cài GitHub App / thêm webhook GitLab) là được kiểm
 | Issue | thiếu thông tin → hỏi lại + label `needs-info`; tự gắn label; phát hiện trùng lặp | Service |
 | Issue lifecycle | stale → nhắc → đóng; cảnh báo SLA cho bug P0 chưa ai nhận | Service (sweep định kỳ) |
 | Issue ↔ PR | PR phải link issue; comment lên issue khi có PR; merge xong tự đóng issue | Service |
+| **Postman / SonarQube / Jenkins** | Chạy Postman collection bằng Newman, quét SonarQube + Quality Gate, hoặc build qua Jenkins; có bộ docker-compose dựng sẵn | CI / executor → [docs/integrations.md](docs/integrations.md) |
 | **Executor** (tuỳ chọn) | repo **không có/không được chạy CI** (GitLab tắt pipeline): service tự build MR trong container cách ly | Service + Docker → [docs/executor.md](docs/executor.md) |
 
 ## Kiến trúc

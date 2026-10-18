@@ -79,6 +79,8 @@ type Report struct {
 	SecretsRan  bool            `json:"secrets_ran"`
 	Vulns       VulnResult      `json:"vulns"`
 	FailOnVulns bool            `json:"fail_on_vulns"`
+	APITests    APITests        `json:"api_tests"`
+	Sonar       SonarResult     `json:"sonar"`
 }
 
 // Summary is a one-line result for a commit status (<= 140 chars).
@@ -96,6 +98,12 @@ func (r Report) Summary() string {
 	if r.Vulns.Count > 0 {
 		s += fmt.Sprintf(", %d vuln(s)", r.Vulns.Count)
 	}
+	if r.APITests.Failed() {
+		s += ", API tests failed"
+	}
+	if r.Sonar.Failed() {
+		s += ", quality gate failed"
+	}
 	return s
 }
 
@@ -105,7 +113,7 @@ func (r Report) Failed() bool {
 			return true
 		}
 	}
-	return len(r.Secrets) > 0 || (r.FailOnVulns && r.Vulns.Count > 0)
+	return len(r.Secrets) > 0 || (r.FailOnVulns && r.Vulns.Count > 0) || r.APITests.Failed() || r.Sonar.Failed()
 }
 
 type Options struct {
@@ -116,6 +124,10 @@ type Options struct {
 	Out     io.Writer // live command output
 	Runner  func(ctx context.Context, dir, command string, out io.Writer) error
 	LookCmd func(name string) bool
+	// Start launches a long-running command (e.g. the API under test) and returns a stop func.
+	Start func(ctx context.Context, dir, command string, out io.Writer) (stop func(), err error)
+	// Getenv reads configuration such as SONAR_HOST_URL (default os.Getenv).
+	Getenv func(string) string
 }
 
 // Run detects projects, runs their stages and the repo-wide scans.
@@ -125,6 +137,12 @@ func Run(ctx context.Context, opts Options) (Report, error) {
 	}
 	if opts.Runner == nil {
 		opts.Runner = runShell
+	}
+	if opts.Getenv == nil {
+		opts.Getenv = os.Getenv
+	}
+	if opts.Start == nil {
+		opts.Start = startBackground
 	}
 	if opts.LookCmd == nil {
 		opts.LookCmd = func(name string) bool { _, err := exec.LookPath(name); return err == nil }
@@ -166,6 +184,10 @@ func Run(ctx context.Context, opts Options) (Report, error) {
 		}
 		report.Secrets = scanSecrets(opts.Dir, files, ciCfg.IgnorePaths)
 	}
+
+	// API tests run after the builds, against a freshly started app.
+	report.APITests = runPostman(ctx, opts, ciCfg.Postman, ciCfg.IgnorePaths)
+	report.Sonar = runSonar(ctx, opts, ciCfg.Sonar)
 
 	if opts.NoVuln {
 		report.Vulns = VulnResult{Note: "disabled (--no-vuln)"}

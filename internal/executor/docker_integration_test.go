@@ -40,7 +40,7 @@ func goProject(t *testing.T, testBody string) string {
 
 func runIn(t *testing.T, d Docker, dir string) (Result, ci.Report) {
 	t.Helper()
-	res, err := d.Run(context.Background(), dir)
+	res, err := d.Run(context.Background(), dir, nil)
 	if err != nil {
 		t.Fatalf("sandbox: %v\nlogs:\n%s", err, res.Logs)
 	}

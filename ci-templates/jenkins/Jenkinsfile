@@ -1,0 +1,57 @@
+// Pipeline for the repoguard executor's Jenkins backend (REPOGUARD_EXECUTOR=jenkins).
+//
+// Create a Pipeline job named "repoguard-ci" (or set JENKINS_JOB) with this
+// script and these string parameters: REPO_URL, GIT_REF, GIT_SHA, REPO_NAME,
+// MR_NUMBER, plus a text parameter REPOGUARD_POLICY. Parameters must be defined
+// on the job itself (deploy/stack does this with Job DSL) because Jenkins only
+// learns a Jenkinsfile's own `parameters {}` after its first run.
+//
+// Needs: a username/password credential "repoguard-git" that can read the
+// repositories, and an agent with git + repoguard + toolchains (e.g. the
+// repoguard-ci image). For SonarQube, give the agent SONAR_HOST_URL/SONAR_TOKEN.
+pipeline {
+  agent any
+  options {
+    timeout(time: 30, unit: 'MINUTES')
+    buildDiscarder(logRotator(numToKeepStr: '50'))
+  }
+  stages {
+    stage('Checkout') {
+      steps {
+        deleteDir()
+        withCredentials([usernamePassword(credentialsId: 'repoguard-git', usernameVariable: 'GIT_USER', passwordVariable: 'GIT_TOKEN')]) {
+          // Single quotes: Groovy must not interpolate secrets. The token goes
+          // through GIT_CONFIG_* env vars, never into argv or .git/config.
+          sh '''
+            set -eu
+            git init -q .
+            GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.extraHeader \
+            GIT_CONFIG_VALUE_0="Authorization: Basic $(printf '%s:%s' "$GIT_USER" "$GIT_TOKEN" | base64 | tr -d '\\n')" \
+              git fetch -q --depth 1 --no-tags "$REPO_URL" "$GIT_REF"
+            git checkout -q --detach FETCH_HEAD
+            test "$(git rev-parse HEAD)" = "$GIT_SHA" || { echo "head moved past $GIT_SHA"; exit 1; }
+          '''
+        }
+        // The policy always comes from the default branch, via repoguard.
+        sh '''
+          if [ -n "${REPOGUARD_POLICY:-}" ]; then
+            printf '%s' "$REPOGUARD_POLICY" | base64 -d > .repoguard.yml
+          else
+            rm -f .repoguard.yml
+          fi
+        '''
+      }
+    }
+    stage('repoguard ci') {
+      steps {
+        sh 'REPOGUARD_REPO="$REPO_NAME" repoguard ci --json repoguard-report.json --report repoguard-report.md --junit repoguard-junit.xml'
+      }
+    }
+  }
+  post {
+    always {
+      archiveArtifacts artifacts: 'repoguard-report.json,repoguard-report.md,repoguard-junit.xml', allowEmptyArchive: true
+      junit allowEmptyResults: true, testResults: 'repoguard-junit.xml'
+    }
+  }
+}

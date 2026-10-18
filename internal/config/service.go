@@ -24,7 +24,7 @@ type Service struct {
 
 // Executor runs `repoguard ci` for repos whose own CI is unavailable. Off by default.
 type Executor struct {
-	Mode        string   // "" (auto: on if docker is found) | "docker" (required) | "off"
+	Mode        string   // "" (auto: docker if found) | "docker" (required) | "jenkins" | "off"
 	Repos       []string // repo globs allowed via env, e.g. "team/*" (the UI can allow more)
 	Image       string
 	CPUs        string
@@ -34,11 +34,28 @@ type Executor struct {
 	Runtime     string // optional container runtime, e.g. runsc (gVisor)
 	Timeout     time.Duration
 	Concurrency int
+	Jenkins     Jenkins
+	Sonar       SonarServer // handed to sandboxed builds so `repoguard ci` can run sonar-scanner
+}
+
+// Jenkins is the remote build backend (REPOGUARD_EXECUTOR=jenkins).
+type Jenkins struct {
+	URL   string
+	User  string
+	Token string
+	Job   string
+}
+
+// SonarServer is where builds send analyses (SONAR_HOST_URL / SONAR_TOKEN).
+type SonarServer struct {
+	HostURL string
+	Token   string
 }
 
 // Disabled reports an explicit opt-out; Required means startup fails without Docker.
-func (e Executor) Disabled() bool { return e.Mode == "off" }
-func (e Executor) Required() bool { return e.Mode == "docker" }
+func (e Executor) Disabled() bool   { return e.Mode == "off" }
+func (e Executor) Required() bool   { return e.Mode == "docker" }
+func (e Executor) UseJenkins() bool { return e.Mode == "jenkins" }
 
 type GitHub struct {
 	APIURL        string // https://api.github.com or https://ghe.example.com/api/v3
@@ -127,6 +144,13 @@ func loadExecutor(x *Executor) error {
 		Memory:  env("REPOGUARD_EXECUTOR_MEMORY", "4g"),
 		Network: env("REPOGUARD_EXECUTOR_NETWORK", "bridge"),
 		Runtime: os.Getenv("REPOGUARD_EXECUTOR_RUNTIME"),
+		Jenkins: Jenkins{
+			URL:   strings.TrimRight(os.Getenv("JENKINS_URL"), "/"),
+			User:  os.Getenv("JENKINS_USER"),
+			Token: os.Getenv("JENKINS_TOKEN"),
+			Job:   env("JENKINS_JOB", "repoguard-ci"),
+		},
+		Sonar: SonarServer{HostURL: os.Getenv("SONAR_HOST_URL"), Token: os.Getenv("SONAR_TOKEN")},
 	}
 	for _, r := range strings.Split(os.Getenv("REPOGUARD_EXECUTOR_REPOS"), ",") {
 		if r = strings.TrimSpace(r); r != "" {
@@ -145,8 +169,12 @@ func loadExecutor(x *Executor) error {
 	}
 	switch x.Mode {
 	case "", "docker", "off":
+	case "jenkins":
+		if x.Jenkins.URL == "" || x.Jenkins.User == "" || x.Jenkins.Token == "" {
+			return fmt.Errorf("REPOGUARD_EXECUTOR=jenkins needs JENKINS_URL, JENKINS_USER and JENKINS_TOKEN")
+		}
 	default:
-		return fmt.Errorf("REPOGUARD_EXECUTOR must be empty, \"docker\" or \"off\", got %q", x.Mode)
+		return fmt.Errorf("REPOGUARD_EXECUTOR must be empty, \"docker\", \"jenkins\" or \"off\", got %q", x.Mode)
 	}
 	// Fail closed regardless of mode: nothing is built until a repository is
 	// allowed via REPOGUARD_EXECUTOR_REPOS or switched on in the UI.

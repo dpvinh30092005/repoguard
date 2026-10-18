@@ -58,6 +58,9 @@ func (r Report) WriteMarkdown(w io.Writer) {
 		}
 	}
 
+	r.writeAPITests(w)
+	r.writeSonar(w)
+
 	switch {
 	case !r.Vulns.Ran:
 		fmt.Fprintf(w, "\n**Dependencies:** ⏭️ %s\n", r.Vulns.Note)
@@ -69,6 +72,72 @@ func (r Report) WriteMarkdown(w io.Writer) {
 			icon = "❌"
 		}
 		fmt.Fprintf(w, "\n**Dependencies:** %s %d known vulnerabilit(ies) — see `osv-scanner` output in the job log\n", icon, r.Vulns.Count)
+	}
+}
+
+func (r Report) writeAPITests(w io.Writer) {
+	a := r.APITests
+	switch {
+	case !a.Ran && a.Note != "":
+		fmt.Fprintf(w, "\n**API tests (Postman):** ⏭️ %s\n", a.Note)
+		return
+	case !a.Ran:
+		return
+	}
+	icon := "✅"
+	if a.Failed() {
+		icon = "❌"
+	}
+	fmt.Fprintf(w, "\n**API tests (Postman):** %s\n\n| Collection | Requests | Assertions | Failed |\n|---|---|---|---|\n", icon)
+	for _, res := range a.Results {
+		if res.Error != "" {
+			fmt.Fprintf(w, "| %s | – | – | ⚠️ %s |\n", res.Name, res.Error)
+			continue
+		}
+		fmt.Fprintf(w, "| %s | %d | %d | %d |\n", res.Name, res.Requests, res.Assertions, res.Failed)
+	}
+	for _, res := range a.Results {
+		for _, f := range res.Failures {
+			fmt.Fprintf(w, "- ❌ **%s** › %s: %s\n", f.Request, f.Test, f.Message)
+		}
+	}
+}
+
+var sonarLabels = map[string]string{
+	"bugs": "Bugs", "vulnerabilities": "Vulnerabilities", "security_hotspots": "Security hotspots",
+	"code_smells": "Code smells", "coverage": "Coverage %", "duplicated_lines_density": "Duplication %",
+}
+
+func (r Report) writeSonar(w io.Writer) {
+	s := r.Sonar
+	switch {
+	case !s.Ran && s.Note != "":
+		fmt.Fprintf(w, "\n**SonarQube:** ⏭️ %s\n", s.Note)
+		return
+	case !s.Ran:
+		return
+	case s.Error != "":
+		fmt.Fprintf(w, "\n**SonarQube:** ⚠️ %s\n", s.Error)
+		return
+	}
+	verdict := map[string]string{"OK": "✅ Quality Gate passed", "ERROR": "❌ Quality Gate failed", "WARN": "⚠️ Quality Gate warning"}[s.Gate]
+	if verdict == "" {
+		verdict = "ℹ️ no Quality Gate (" + s.Gate + ")"
+	}
+	fmt.Fprintf(w, "\n**SonarQube:** %s · [%s](%s)\n", verdict, s.ProjectKey, s.URL)
+	var parts []string
+	for _, m := range SonarMetrics {
+		if v, ok := s.Measures[m]; ok {
+			parts = append(parts, fmt.Sprintf("%s: **%s**", sonarLabels[m], v))
+		}
+	}
+	if len(parts) > 0 {
+		fmt.Fprintf(w, "\n%s\n", strings.Join(parts, " · "))
+	}
+	for _, c := range s.Conditions {
+		if c.Status == "ERROR" {
+			fmt.Fprintf(w, "- ❌ `%s` = %s (limit %s %s)\n", c.Metric, c.Actual, c.Comparator, c.Threshold)
+		}
 	}
 }
 
@@ -128,6 +197,30 @@ func (r Report) WriteJUnit(w io.Writer) error {
 				fmt.Fprintf(&b, "%s:%d %s (%s)\n", f.Path, f.Line, f.Rule, f.Masked)
 			}
 			c.Failure = &junitFailure{Message: fmt.Sprintf("%d possible secret(s)", len(r.Secrets)), Text: b.String()}
+		}
+		add(c)
+	}
+	for _, res := range r.APITests.Results {
+		c := junitCase{Classname: "postman", Name: res.Name, Time: res.Duration.Seconds()}
+		switch {
+		case res.Error != "":
+			c.Failure = &junitFailure{Message: res.Error}
+		case res.Failed > 0:
+			var b strings.Builder
+			for _, f := range res.Failures {
+				fmt.Fprintf(&b, "%s > %s: %s\n", f.Request, f.Test, f.Message)
+			}
+			c.Failure = &junitFailure{Message: fmt.Sprintf("%d failed assertion(s)", res.Failed), Text: b.String()}
+		}
+		add(c)
+	}
+	if r.Sonar.Ran {
+		c := junitCase{Classname: "sonar", Name: "quality-gate"}
+		switch {
+		case r.Sonar.Error != "":
+			c.Failure = &junitFailure{Message: r.Sonar.Error}
+		case r.Sonar.FailOnGate && r.Sonar.Gate == "ERROR":
+			c.Failure = &junitFailure{Message: "quality gate failed: " + r.Sonar.URL}
 		}
 		add(c)
 	}

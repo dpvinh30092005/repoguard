@@ -63,6 +63,17 @@ func TestExecutorConfig(t *testing.T) {
 		t.Fatalf("executor = %+v", cfg.Executor)
 	}
 
+	t.Setenv("REPOGUARD_EXECUTOR", "jenkins")
+	if _, err := LoadService(); err == nil {
+		t.Fatal("jenkins mode without credentials must fail")
+	}
+	t.Setenv("JENKINS_URL", "https://ci.example/")
+	t.Setenv("JENKINS_USER", "bot")
+	t.Setenv("JENKINS_TOKEN", "tok")
+	if cfg, err = LoadService(); err != nil || !cfg.Executor.UseJenkins() || cfg.Executor.Jenkins.URL != "https://ci.example" || cfg.Executor.Jenkins.Job != "repoguard-ci" {
+		t.Fatalf("jenkins config = %+v err=%v", cfg.Executor.Jenkins, err)
+	}
+
 	t.Setenv("REPOGUARD_EXECUTOR", "kubernetes")
 	if _, err := LoadService(); err == nil {
 		t.Fatal("unknown executor mode must fail")
