@@ -122,6 +122,18 @@ over the UI (see [Configuration](#configuration)).
 
 ![Overview page](docs/images/overview.png)
 
+### Prebuilt images
+
+Every release tag publishes public images to GHCR (`:1` tracks the latest 1.x, `:1.0.0` is fixed).
+The compose files pull them, so you don't have to build anything; add `--build` to build from
+source instead.
+
+| Image | Purpose |
+|---|---|
+| `ghcr.io/dpvinh30092005/repoguard` | The service (distroless, no CI builds) |
+| `ghcr.io/dpvinh30092005/repoguard-executor` | The service plus Docker CLI and git, for CI builds |
+| `ghcr.io/dpvinh30092005/repoguard-ci` | The build image: Go, Node, Python, Newman, sonar-scanner, osv-scanner |
+
 ### Try everything at once
 
 [`deploy/stack`](deploy/stack) starts repoguard, **SonarQube** and a pre-configured **Jenkins**
@@ -149,8 +161,8 @@ deploy/stack/init-sonar.sh        # once: prints a SonarQube token for .env
 | 4. Policy (optional) | Commit `.repoguard.yml` to the default branch | Same |
 | 5. Enforce | Require `repoguard/pr-rules`, `repoguard/secrets` and the CI job in branch protection | *Pipelines must succeed* |
 
-GitHub repositories reuse the CI half as a reusable workflow (the `v1` tag is not published
-yet; until it is, pin a commit SHA instead):
+GitHub repositories reuse the CI half as a reusable workflow (`@v1` follows the latest 1.x
+release; pin `@v1.0.0` or a commit SHA for fully reproducible builds):
 
 ```yaml
 # .github/workflows/repoguard.yml

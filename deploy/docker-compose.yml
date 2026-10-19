@@ -3,6 +3,7 @@
 # For webhooks, expose port 8080 behind TLS (Caddy, nginx, a cloud load balancer).
 services:
   repoguard:
+    image: ghcr.io/dpvinh30092005/repoguard:1     # `up --build` builds from source instead
     build:
       context: ..
       dockerfile: deploy/Dockerfile
