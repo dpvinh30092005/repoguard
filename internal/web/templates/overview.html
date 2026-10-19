@@ -53,7 +53,7 @@
 {{if and .Ex.Available (eq .Ex.Backend "docker") (not .Ex.ImagePresent) .ExecutorRepos}}
 <div class="card">
   <h2>The CI build image is not downloaded yet</h2>
-  <p>A project has CI builds turned on, but this machine has no <code>{{.Ex.Image}}</code> image yet. The first build downloads it (about 1 GB, so that build is slower). To download it now instead:</p>
+  <p>A project has CI builds turned on, but this machine has no <code>{{.Ex.Image}}</code> image yet. The first build downloads it (about 650 MB, so that build is slower). To download it now instead:</p>
   <p><code>docker pull {{.Ex.Image}}</code></p>
 </div>
 {{end}}
