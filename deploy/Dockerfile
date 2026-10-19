@@ -15,6 +15,6 @@ COPY --from=build /out/repoguard /repoguard
 # Settings entered in the web UI live here; mount a volume to keep them.
 COPY --from=build --chown=65532:65532 /out/data /data
 ENV REPOGUARD_DATA_DIR=/data
-EXPOSE 8080
+EXPOSE 47474
 ENTRYPOINT ["/repoguard"]
 CMD ["serve"]

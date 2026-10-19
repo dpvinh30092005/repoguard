@@ -1,5 +1,5 @@
 # repoguard with CI builds: it can build merge requests itself when a project's
-# pipelines are disabled. Open http://localhost:8080 afterwards.
+# pipelines are disabled. Open http://localhost:47474 afterwards.
 #   docker compose -f deploy/docker-compose.executor.yml up -d
 #   docker pull ghcr.io/dpvinh30092005/repoguard-ci:1   # build image (pulled on first build anyway)
 #
@@ -15,8 +15,10 @@ services:
     env_file:
       - path: .env        # optional: everything can also be set in the web UI
         required: false
+    environment:
+      REPOGUARD_ADDR: ":47474"   # keep in sync with the port mapping below
     ports:
-      - "8080:8080"
+      - "47474:47474"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - repoguard-data:/data

@@ -86,7 +86,7 @@ func (a AI) Enabled() bool { return a.APIKey != "" }
 // LoadService reads settings from the environment (12-factor).
 func LoadService() (Service, error) {
 	s := Service{
-		Addr:      env("REPOGUARD_ADDR", ":8080"),
+		Addr:      env("REPOGUARD_ADDR", ":47474"),
 		PublicURL: os.Getenv("REPOGUARD_PUBLIC_URL"),
 		GitHub: GitHub{
 			APIURL:        strings.TrimRight(env("GITHUB_API_URL", "https://api.github.com"), "/"),

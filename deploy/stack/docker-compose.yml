@@ -4,7 +4,7 @@
 #   docker compose -f deploy/stack/docker-compose.yml up -d --build
 #   deploy/stack/init-sonar.sh                           # once: prints SONAR_TOKEN for .env
 #
-# repoguard  http://localhost:8080   (web UI / webhooks)
+# repoguard  http://localhost:47474  (web UI / webhooks)
 # SonarQube  http://localhost:9000
 # Jenkins    http://localhost:8081
 #
@@ -28,8 +28,9 @@ services:
       SONAR_HOST_URL: http://sonarqube:9000
       REPOGUARD_EXECUTOR_NETWORK: repoguard-stack   # docker sandbox can reach sonarqube
       REPOGUARD_DATA_DIR: /data
+      REPOGUARD_ADDR: ":47474"
     ports:
-      - "8080:8080"
+      - "47474:47474"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - repoguard-data:/data

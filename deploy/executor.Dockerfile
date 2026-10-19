@@ -15,6 +15,6 @@ RUN apk add --no-cache git ca-certificates
 COPY --from=build /out/repoguard /usr/local/bin/repoguard
 RUN mkdir -p /data
 ENV REPOGUARD_DATA_DIR=/data
-EXPOSE 8080
+EXPOSE 47474
 ENTRYPOINT ["repoguard"]
 CMD ["serve"]

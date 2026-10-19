@@ -69,7 +69,7 @@ docker compose -f deploy/stack/docker-compose.yml up -d
 
 | Dịch vụ | Địa chỉ | Đăng nhập |
 |---|---|---|
-| repoguard | http://localhost:8080 | |
+| repoguard | http://localhost:47474 | |
 | Jenkins | http://localhost:8081 | `admin` / `JENKINS_ADMIN_PASSWORD` |
 | SonarQube | http://localhost:9000 | `admin` / mật khẩu do `init-sonar.sh` in ra |
 

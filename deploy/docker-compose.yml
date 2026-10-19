@@ -1,6 +1,6 @@
-# Single-host deployment. Open http://localhost:8080 and sign in with the
+# Single-host deployment. Open http://localhost:47474 and sign in with the
 # password printed in the logs (`docker compose logs repoguard | grep "admin password"`).
-# For webhooks, expose port 8080 behind TLS (Caddy, nginx, a cloud load balancer).
+# For webhooks, expose port 47474 behind TLS (Caddy, nginx, a cloud load balancer).
 services:
   repoguard:
     image: ghcr.io/dpvinh30092005/repoguard:1     # `up --build` builds from source instead
@@ -10,8 +10,10 @@ services:
     env_file:
       - path: .env        # optional: everything can also be set in the web UI
         required: false
+    environment:
+      REPOGUARD_ADDR: ":47474"   # keep in sync with the port mapping below
     ports:
-      - "8080:8080"
+      - "47474:47474"
     volumes:
       - repoguard-data:/data
     restart: unless-stopped

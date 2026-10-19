@@ -109,7 +109,7 @@ docker compose -f deploy/docker-compose.executor.yml up -d     # or deploy/docke
 docker compose -f deploy/docker-compose.executor.yml logs repoguard | grep "admin password"
 ```
 
-Open **http://localhost:8080**, sign in, then:
+Open **http://localhost:47474**, sign in, then:
 
 1. **Connections**: paste a GitLab URL and access token (or a GitHub token) and click *Save & test*.
 2. **Projects**: click *Start checking* next to a project and, if you want, turn on *CI builds*.
@@ -147,7 +147,7 @@ deploy/stack/init-sonar.sh        # once: prints a SonarQube token for .env
 
 | Service | URL |
 |---|---|
-| repoguard | http://localhost:8080 |
+| repoguard | http://localhost:47474 |
 | Jenkins | http://localhost:8081 |
 | SonarQube | http://localhost:9000 |
 
@@ -210,7 +210,7 @@ See [`.repoguard.example.yml`](.repoguard.example.yml) for every option with its
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `REPOGUARD_ADDR` | `:8080` | Listen address |
+| `REPOGUARD_ADDR` | `:47474` | Listen address |
 | `REPOGUARD_ADMIN_PASSWORD` | generated, printed in the log | Web console password |
 | `REPOGUARD_DATA_DIR` | `data` (`/data` in images) | Where settings entered in the web console are stored |
 | `REPOGUARD_POLL_INTERVAL` | `30s` | How often projects in polling mode are checked |
