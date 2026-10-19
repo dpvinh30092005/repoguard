@@ -52,9 +52,9 @@
 
 {{if and .Ex.Available (eq .Ex.Backend "docker") (not .Ex.ImagePresent) .ExecutorRepos}}
 <div class="card">
-  <h2>⚠️ The CI build image is missing</h2>
-  <p>A project has CI builds turned on, but this machine has no <code>{{.Ex.Image}}</code> image yet. Build it once from the repoguard directory (about 5–10 minutes):</p>
-  <p><code>docker build -f deploy/ci-runner.Dockerfile -t {{.Ex.Image}} .</code></p>
+  <h2>The CI build image is not downloaded yet</h2>
+  <p>A project has CI builds turned on, but this machine has no <code>{{.Ex.Image}}</code> image yet. The first build downloads it (about 1 GB, so that build is slower). To download it now instead:</p>
+  <p><code>docker pull {{.Ex.Image}}</code></p>
 </div>
 {{end}}
 {{if not .Ex.Available}}<p class="hint">CI builds: {{.Ex.Reason}}</p>{{end}}
