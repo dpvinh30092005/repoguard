@@ -14,8 +14,10 @@ import (
 	"testing"
 
 	"github.com/dpvinh30092005/repoguard/internal/activity"
+	"github.com/dpvinh30092005/repoguard/internal/checks"
 	"github.com/dpvinh30092005/repoguard/internal/platform"
 	"github.com/dpvinh30092005/repoguard/internal/poller"
+	"github.com/dpvinh30092005/repoguard/internal/results"
 	"github.com/dpvinh30092005/repoguard/internal/store"
 )
 
@@ -59,6 +61,7 @@ type harness struct {
 	applied int
 	events  []platform.Event
 	public  string
+	results *results.Store
 }
 
 func newHarness(t *testing.T) *harness {
@@ -69,11 +72,12 @@ func newHarness(t *testing.T) *harness {
 	}
 	h.store = st
 	reg := platform.NewRegistry(h.fake)
+	h.results, _ = results.Open("")
 	act := activity.New(10)
 	act.Add(activity.Entry{Repo: "team/api", Kind: "MR", Number: 5, Event: "change_request.opened", Result: "ok", URL: "https://gitlab.example/mr/5"})
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	ui := &UI{
-		Store: st, Clients: reg, Activity: act, Log: log, Version: "test",
+		Store: st, Clients: reg, Activity: act, Results: h.results, Log: log, Version: "test",
 		Poller:   &poller.Poller{Clients: reg, Enqueue: func(e platform.Event) { h.events = append(h.events, e) }, Log: log},
 		Password: func() string { return "s3cret-pass" },
 		Apply: func(context.Context) map[platform.Kind]Status {
@@ -152,10 +156,11 @@ func TestEveryPageRenders(t *testing.T) {
 	h := newHarness(t)
 	h.login()
 	for path, want := range map[string]string{
-		"/":        "New MR / new commits",
-		"/connect": "Where CI builds run",
-		"/repos":   "team/web",
-		"/guide":   "Try it in 5 minutes",
+		"/":               "Checked new commits",
+		"/connect":        "Save Connection",
+		"/repos":          "team/web",
+		"/guide":          "Try It in 5 Minutes",
+		"/merge-requests": "No Projects Checked Yet",
 	} {
 		if code, body := h.get(path); code != 200 || !strings.Contains(body, want) {
 			t.Errorf("%s: %d, missing %q", path, code, want)
@@ -201,7 +206,7 @@ func TestWatchPollingThenWebhook(t *testing.T) {
 	}
 
 	code, body := h.post("/repos/check", repoForm)
-	if code != 200 || len(h.events) != 1 || !h.events[0].CodeChanged || !strings.Contains(body, "Queued 1 merge request(s)") {
+	if code != 200 || len(h.events) != 1 || !h.events[0].CodeChanged || !strings.Contains(body, "Checking 1 merge request of team/api") {
 		t.Fatalf("check now: %d events=%+v", code, h.events)
 	}
 
@@ -245,5 +250,53 @@ func TestTamperedSessionIsRejected(t *testing.T) {
 	h.client.Jar.SetCookies(u, []*http.Cookie{{Name: cookieName, Value: "9999999999.deadbeef"}})
 	if _, body := h.get("/"); !strings.Contains(body, "Sign in to the admin console") {
 		t.Fatal("forged cookie must not grant access")
+	}
+}
+
+func TestReviewPagesShowFindings(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	repo := platform.Repo{Platform: platform.GitLab, FullName: "team/api"}
+	cr := &platform.ChangeRequest{Number: 55, Title: "Event catalogue <script>", Author: "tu", HeadSHA: "abcdef123", State: "open", URL: "https://gitlab.example/mr/55"}
+	h.results.RecordChecks(repo, cr, cr.URL, []checks.Result{
+		{Check: "pr-rules", State: platform.StateFailure, Summary: "1 convention problem(s)", Findings: []checks.Finding{
+			{Severity: checks.SeverityError, Message: "Title `update stuff` does not match <b>"},
+		}},
+		{Check: "secrets", State: platform.StateSuccess, Summary: "No secrets"},
+	}, nil, "")
+
+	_, list := h.get("/merge-requests?view=failing")
+	for _, want := range []string{"Event catalogue &lt;script&gt;", "!55", "Conventions: Title <code>update stuff</code> does not match &lt;b&gt;", "Failing <span class=\"n\">1</span>"} {
+		if !strings.Contains(list, want) {
+			t.Fatalf("list missing %q", want)
+		}
+	}
+	id := results.IDFor("gitlab", "team/api", 55)
+	code, page := h.get("/merge-requests/" + id)
+	for _, want := range []string{"Title <code>update stuff</code> does not match &lt;b&gt;", "How to fix:", "Open in GitLab", "Commit <code>abcdef1</code>"} {
+		if code != 200 || !strings.Contains(page, want) {
+			t.Fatalf("detail %d missing %q", code, want)
+		}
+	}
+	if strings.Contains(page, "<script>") && strings.Contains(page, "catalogue <script>") {
+		t.Fatal("titles must be escaped")
+	}
+	if code, _ := h.get("/merge-requests/nope"); code != 404 {
+		t.Fatalf("unknown id: %d", code)
+	}
+	if _, overview := h.get("/"); !strings.Contains(overview, "Needs Attention") || !strings.Contains(overview, "/merge-requests/"+id) {
+		t.Fatal("overview should list the failing merge request")
+	}
+}
+
+func TestStylesheetIsServedWithoutLogin(t *testing.T) {
+	h := newHarness(t)
+	resp, err := http.Get(h.srv.URL + "/assets/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 || !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/css") {
+		t.Fatalf("css: %d %s", resp.StatusCode, resp.Header.Get("Content-Type"))
 	}
 }

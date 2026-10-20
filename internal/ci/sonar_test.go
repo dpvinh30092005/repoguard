@@ -87,7 +87,7 @@ func TestSonarReportsQualityGate(t *testing.T) {
 	}
 	var md bytes.Buffer
 	report.WriteMarkdown(&md)
-	for _, want := range []string{"❌ Quality Gate failed", "Bugs: **2**", "`new_coverage` = 41.2 (limit LT 80)"} {
+	for _, want := range []string{"**Quality Gate failed**", "Bugs: **2**", "`new_coverage` = 41.2 (limit LT 80)"} {
 		if !strings.Contains(md.String(), want) {
 			t.Errorf("markdown missing %q:\n%s", want, md.String())
 		}

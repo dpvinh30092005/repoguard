@@ -17,6 +17,7 @@ import (
 	"github.com/dpvinh30092005/repoguard/internal/platform"
 	"github.com/dpvinh30092005/repoguard/internal/platform/github"
 	"github.com/dpvinh30092005/repoguard/internal/platform/gitlab"
+	"github.com/dpvinh30092005/repoguard/internal/results"
 	"github.com/dpvinh30092005/repoguard/internal/store"
 	"github.com/dpvinh30092005/repoguard/internal/web"
 )
@@ -32,6 +33,7 @@ type app struct {
 	reg      *platform.Registry
 	reviewer *aireview.Switchable
 	exec     *executor.Executor // nil when REPOGUARD_EXECUTOR=off
+	results  *results.Store
 
 	dockerOK  bool
 	dockerWhy string

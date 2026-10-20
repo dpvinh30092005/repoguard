@@ -44,7 +44,7 @@ comment and inline review comments.
 | **Issue lifecycle** | Marks and closes stale issues; flags high-priority issues nobody picked up | Service (periodic sweep) |
 | **Issue ↔ PR links** | Requires a linked issue, notes the PR on the issue, closes it on merge | Service |
 | **Executor** | Builds merge requests itself, in a sandbox or on Jenkins, when a project has no working CI | Service + Docker/Jenkins |
-| **Web console** | Connect GitLab/GitHub, choose projects, turn CI builds on and follow recent activity in the browser. Polling mode needs no public URL | Service |
+| **Web console** | Every merge request with the result of each check, the exact problems and how to fix them; connect GitLab/GitHub, choose projects and turn builds on. Polling mode needs no public URL | Service |
 
 ## How it works
 
@@ -111,9 +111,12 @@ docker compose -f deploy/docker-compose.executor.yml logs repoguard | grep "admi
 
 Open **http://localhost:47474**, sign in, then:
 
-1. **Connections**: paste a GitLab URL and access token (or a GitHub token) and click *Save & test*.
-2. **Projects**: click *Start checking* next to a project and, if you want, turn on *CI builds*.
-3. Open or push to a merge request. Results appear on the merge request and under *Recent activity*.
+1. **Settings**: paste a GitLab address and access token (or a GitHub token) and select *Save Connection*.
+2. **Projects**: select *Start Checking* next to a project and, if its pipelines are disabled, *Turn On Builds*.
+   For merge requests that are already open, select *Run Checks*.
+3. **Merge Requests**: every checked merge request with the result of each check. Select one to
+   see the exact problems, where they are and how to fix them. The same summary is posted as one
+   comment on the merge request, and each commit status links back to this page.
 
 Without a public URL, repoguard **polls** GitLab/GitHub every 30 seconds, so this works on a
 laptop with no open ports. Set a public URL (behind TLS) and it creates **webhooks** instead, for
@@ -121,6 +124,13 @@ instant reactions. Every setting can also come from environment variables, which
 over the UI (see [Configuration](#configuration)).
 
 ![Overview page](docs/images/overview.png)
+
+![Merge request page](docs/images/merge-request.png)
+
+The console follows Vercel's [Geist](https://vercel.com/geist) design system and ships the Geist
+Sans and Geist Mono fonts (SIL Open Font License, `internal/web/static/fonts/OFL.txt`) inside the
+binary, so it works offline. The latest result of each merge request is kept in `results.json`
+next to the settings, so the history survives a restart.
 
 ### Prebuilt images
 
@@ -212,7 +222,7 @@ See [`.repoguard.example.yml`](.repoguard.example.yml) for every option with its
 |---|---|---|
 | `REPOGUARD_ADDR` | `:47474` | Listen address |
 | `REPOGUARD_ADMIN_PASSWORD` | generated, printed in the log | Web console password |
-| `REPOGUARD_DATA_DIR` | `data` (`/data` in images) | Where settings entered in the web console are stored |
+| `REPOGUARD_DATA_DIR` | `data` (`/data` in images) | Where settings entered in the web console and the latest results are stored |
 | `REPOGUARD_POLL_INTERVAL` | `30s` | How often projects in polling mode are checked |
 | `REPOGUARD_WORKERS` / `REPOGUARD_QUEUE_SIZE` | `8` / `1000` | Worker pool and queue capacity |
 | `REPOGUARD_SWEEP_INTERVAL` | `6h` | Stale/SLA sweep interval (`0` disables; use `repoguard sweep` from cron) |
@@ -248,7 +258,7 @@ can build merge requests itself and post a **🧪 repoguard ci** comment with pe
 
 It is opt-in and fenced:
 
-- Nothing is built unless *CI builds* is turned on for the project in the web console, or the
+- Nothing is built unless builds are turned on for the project in the web console, or the
   repository matches `REPOGUARD_EXECUTOR_REPOS`.
 - Only authors with Developer/write access are built; **forks never are**.
 - The policy comes from the default branch, never from the merge request.
@@ -309,6 +319,7 @@ internal/
   ci/                   `repoguard ci`: project detection, stages, Postman, Sonar, reports
   executor/             sandboxed and Jenkins builds for repositories without CI
   web/ store/ poller/   web console, saved settings, change detection without webhooks
+  results/              latest result of each change request, for the console
   queue/ server/ config/ diff/ glob/ metrics/
 ci-templates/           drop-in CI for GitHub, GitLab and Jenkins
 deploy/                 Dockerfiles, compose files, demo stack (SonarQube + Jenkins)

@@ -1,87 +1,139 @@
-{{define "content"}}
-<h1>Overview</h1>
-<p class="lead">This page refreshes every 15 seconds.</p>
-
-{{if not .Connected}}
-<div class="card">
-  <h2>Get started in 3 steps</h2>
-  <ol class="steps">
-    <li><a href="/connect"><b>Connect GitLab or GitHub</b></a>: paste the URL and a token, then click “Save &amp; test”.</li>
-    <li><b>Pick a project</b> on the Projects page and click “Start checking”.</li>
-    <li><b>Open or push to a merge request</b>. Results show up below and as comments on the merge request.</li>
-  </ol>
+{{define "title"}}Overview · repoguard{{end}}
+{{define "head"}}
+<div class="page-head">
+  <div>
+    <h1>Overview</h1>
+    <p>What repoguard found in the open merge requests of the projects it checks.</p>
+  </div>
+  <div class="actions"><a class="btn" href="/merge-requests">View Merge Requests</a></div>
 </div>
-{{else if not .Repos}}
+{{end}}
+{{define "content"}}
+{{if or (not .Connected) (not .Repos) (not .Checked)}}
 <div class="card">
-  <h2>Almost there</h2>
-  <ol class="steps">
-    <li class="done">Connected{{if .GitLab.User}} to GitLab (@{{.GitLab.User}}){{end}}{{if .GitHub.User}} to GitHub (@{{.GitHub.User}}){{end}}.</li>
-    <li><a href="/repos"><b>Pick the projects</b></a> you want checked and click “Start checking”.</li>
-    <li><b>Open or push to a merge request</b> in one of them.</li>
-  </ol>
+  <div class="card-head"><h2>Set Up repoguard</h2><span class="sub">3 steps, about 5 minutes</span></div>
+  <div class="card-body">
+    <ol class="steps">
+      <li class="{{if .Connected}}done{{else}}current{{end}}">{{if .Connected}}<span class="tick"></span>{{end}}
+        <b>Connect GitLab or GitHub</b>
+        <span class="secondary">{{if .Connected}}Connected{{if .GitLab.User}} to GitLab as @{{.GitLab.User}}{{end}}{{if .GitHub.User}} to GitHub as @{{.GitHub.User}}{{end}}.{{else}}Paste the server address and an access token in <a href="/connect">Settings</a>.{{end}}</span>
+      </li>
+      <li class="{{if .Repos}}done{{else if .Connected}}current{{end}}">{{if .Repos}}<span class="tick"></span>{{end}}
+        <b>Choose Projects to Check</b>
+        <span class="secondary">{{if .Repos}}{{len .Repos}} {{plural (len .Repos) "project is" "projects are"}} being checked.{{else}}In <a href="/repos">Projects</a>, select Start Checking next to a project.{{end}}</span>
+      </li>
+      <li class="{{if .Checked}}done{{else if .Repos}}current{{end}}">{{if .Checked}}<span class="tick"></span>{{end}}
+        <b>Open or Update a Merge Request</b>
+        <span class="secondary">Results appear here and as one comment on the merge request. For merge requests that are already open, select Run Checks in <a href="/repos">Projects</a>.</span>
+      </li>
+    </ol>
+  </div>
 </div>
 {{end}}
 
-<div class="grid">
-  <div class="card stat">
-    <div class="label">GitLab</div>
-    <div class="value">{{if .GitLab.User}}<span class="badge b-ok">Connected</span> @{{.GitLab.User}}{{else if .GitLab.Err}}<span class="badge b-bad">Error</span>{{else}}<span class="badge b-mute">Not connected</span>{{end}}</div>
+<div class="grid metrics">
+  <div class="card metric">
+    <div class="label">Open Merge Requests</div>
+    <div class="value">{{.Counts.Open}}</div>
+    <div class="caption">Checked in {{.Counts.Projects}} {{plural .Counts.Projects "project" "projects"}}</div>
   </div>
-  <div class="card stat">
-    <div class="label">GitHub</div>
-    <div class="value">{{if .GitHub.User}}<span class="badge b-ok">Connected</span> @{{.GitHub.User}}{{else if .GitHub.Err}}<span class="badge b-bad">Error</span>{{else}}<span class="badge b-mute">Not connected</span>{{end}}</div>
+  <div class="card metric{{if .Counts.Failing}} danger{{end}}">
+    <div class="label">Failing</div>
+    <div class="value">{{.Counts.Failing}}</div>
+    <div class="caption">Need changes before merging</div>
   </div>
-  <div class="card stat">
-    <div class="label">Watched projects</div>
-    <div class="value">{{len .Repos}} project(s) · {{.ExecutorRepos}} with CI builds</div>
+  <div class="card metric{{if .Counts.Passing}} success{{end}}">
+    <div class="label">Passing</div>
+    <div class="value">{{.Counts.Passing}}</div>
+    <div class="caption">Every check passed</div>
   </div>
-  <div class="card stat">
-    <div class="label">CI builds ({{if eq .Ex.Backend "jenkins"}}Jenkins{{else}}Docker{{end}})</div>
-    <div class="value">
-      {{if not .Ex.Available}}<span class="badge b-mute">Unavailable</span>
-      {{else if and (eq .Ex.Backend "docker") (not .Ex.ImagePresent)}}<span class="badge b-warn">Image missing</span>
-      {{else}}<span class="badge b-ok">Ready</span>{{end}}
-      {{if .Ex.Sonar}}<span class="badge b-ok">+ SonarQube</span>{{end}}
+  <div class="card metric">
+    <div class="label">Problems Found</div>
+    <div class="value">{{.Counts.Problems}}</div>
+    <div class="caption">Errors across open merge requests</div>
+  </div>
+</div>
+
+<div class="grid split">
+  <div class="card">
+    <div class="card-head">
+      <h2>Needs Attention</h2>
+      {{if .Attention}}<a class="sub" href="/merge-requests?view=failing">View All Failing</a>{{end}}
+    </div>
+    {{if .Attention}}
+    <div class="table-wrap"><table>
+      <thead><tr><th>Merge Request</th><th>Main Problem</th><th class="right col-updated">Updated</th></tr></thead>
+      <tbody>
+      {{range .Attention}}
+      <tr class="link">
+        <td><a class="stretch title" href="/merge-requests/{{.ID}}">{{.Title}}</a><span class="meta">{{.Repo}} · {{ref .Platform .Number}} · @{{.Author}}</span></td>
+        <td><span class="reason clamp">{{md .Reason}}{{if .More}} <span class="muted">and {{.More}} more</span>{{end}}</span></td>
+        <td class="right muted nowrap col-updated">{{ago .UpdatedAt}}</td>
+      </tr>
+      {{end}}
+      </tbody>
+    </table></div>
+    {{if .More}}<div class="card-foot"><span>{{.More}} more failing</span><a class="btn sm" href="/merge-requests?view=failing">View All Failing</a></div>{{end}}
+    {{else}}
+    <div class="empty">
+      {{if .Checked}}
+      <h3>Nothing Needs Attention</h3>
+      <p>Every open merge request repoguard has checked passes all its checks.</p>
+      {{else}}
+      <h3>No Results Yet</h3>
+      <p>No merge request has been checked yet. Open or update one in a checked project to see its problems here.</p>
+      {{if .Repos}}<a class="btn" href="/repos">Run Checks</a>{{end}}
+      {{end}}
+    </div>
+    {{end}}
+  </div>
+
+  <div class="stack">
+    <div class="card">
+      <div class="card-head"><h2>System</h2><a class="sub" href="/connect">Open Settings</a></div>
+      <div>
+        <div class="kv-row"><span class="k">GitLab</span><span class="v">
+          {{if .GitLab.User}}<span class="pill success">Connected</span>{{else if .GitLab.Err}}<span class="pill danger" title="{{.GitLab.Err}}">Connection Error</span>{{else}}<span class="pill neutral">Not Connected</span>{{end}}</span></div>
+        {{if or .GitHub.User .GitHub.Err}}
+        <div class="kv-row"><span class="k">GitHub</span><span class="v">
+          {{if .GitHub.User}}<span class="pill success">Connected</span>{{else}}<span class="pill danger" title="{{.GitHub.Err}}">Connection Error</span>{{end}}</span></div>
+        {{end}}
+        <div class="kv-row"><span class="k">Projects Checked</span><span class="v num"><a href="/repos">{{len .Repos}}</a></span></div>
+        <div class="kv-row"><span class="k">Updates Arrive By</span><span class="v">{{if .PublicURL}}Webhook{{else}}Polling every 30 s{{end}}</span></div>
+        <div class="kv-row"><span class="k">AI Review</span><span class="v">{{if .AI}}<span class="pill success">On</span>{{else}}<span class="pill neutral">Off</span>{{end}}</span></div>
+        <div class="kv-row"><span class="k">Build &amp; Tests</span><span class="v">
+          {{if not .Ex.Available}}<span class="pill neutral" title="{{.Ex.Reason}}">Unavailable</span>
+          {{else if and (eq .Ex.Backend "docker") (not .Ex.ImagePresent) .ExecutorRepos}}<span class="pill warning">Image Not Downloaded</span>
+          {{else}}<span class="pill success">{{if eq .Ex.Backend "jenkins"}}Jenkins{{else}}Docker{{end}}</span>{{end}}
+          <span class="muted">{{.ExecutorRepos}} {{plural .ExecutorRepos "project" "projects"}}</span></span></div>
+        <div class="kv-row"><span class="k">SonarQube</span><span class="v">{{if .Ex.Sonar}}<span class="pill success">On</span>{{else}}<span class="pill neutral">Off</span>{{end}}</span></div>
+        <div class="kv-row"><span class="k">Jobs Waiting</span><span class="v num">{{.Queue}}</span></div>
+      </div>
+      {{if and .Ex.Available (eq .Ex.Backend "docker") (not .Ex.ImagePresent) .ExecutorRepos}}
+      <div class="card-foot"><span>The build image downloads with the first build (about 650 MB). To download it now, run <code>docker pull {{.Ex.Image}}</code></span></div>
+      {{end}}
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h2>Recent Activity</h2></div>
+      {{if .Activity}}
+      <ul class="feed">
+        {{range .Activity}}
+        <li>
+          <span class="what">
+            {{if .URL}}<a href="{{.URL}}" target="_blank" rel="noopener"><b>{{if eq .Kind "Issue"}}#{{.Number}}{{else}}{{ref .Platform .Number}}{{end}}</b></a>{{else}}<b>{{.Number}}</b>{{end}}
+            {{eventLabel .Event}}
+            <span class="detail repo" title="{{.Repo}}">{{.Repo}}</span>
+            {{if .Detail}}<span class="detail">{{.Detail}}</span>{{end}}
+          </span>
+          <span class="side">{{with activityPill .Result}}<span class="pill {{.Class}}">{{.Text}}</span>{{end}}<span class="when">{{ago .Time}}</span></span>
+        </li>
+        {{end}}
+      </ul>
+      {{else}}
+      <div class="empty"><p>No activity yet. It starts with the first merge request checked.</p></div>
+      {{end}}
     </div>
   </div>
-  <div class="card stat">
-    <div class="label">AI review</div>
-    <div class="value">{{if .AI}}<span class="badge b-ok">On</span>{{else}}<span class="badge b-mute">Off</span>{{end}} · queue: {{.Queue}}</div>
-  </div>
-</div>
-
-{{if and .Ex.Available (eq .Ex.Backend "docker") (not .Ex.ImagePresent) .ExecutorRepos}}
-<div class="card">
-  <h2>The CI build image is not downloaded yet</h2>
-  <p>A project has CI builds turned on, but this machine has no <code>{{.Ex.Image}}</code> image yet. The first build downloads it (about 650 MB, so that build is slower). To download it now instead:</p>
-  <p><code>docker pull {{.Ex.Image}}</code></p>
-</div>
-{{end}}
-{{if not .Ex.Available}}<p class="hint">CI builds: {{.Ex.Reason}}</p>{{end}}
-
-<div class="card">
-  <h2>Recent activity</h2>
-  {{if .Activity}}
-  <div class="scroll"><table>
-    <tr><th>When</th><th>Project</th><th>Item</th><th>Event</th><th>Result</th></tr>
-    {{range .Activity}}
-    <tr>
-      <td class="muted">{{ago .Time}}</td>
-      <td>{{.Repo}}</td>
-      <td>{{if .URL}}<a href="{{.URL}}" target="_blank" rel="noopener">{{.Kind}} #{{.Number}}</a>{{else}}{{.Kind}} #{{.Number}}{{end}}</td>
-      <td class="muted">{{eventLabel .Event}}</td>
-      <td>
-        {{if or (eq .Result "ok") (eq .Result "passed")}}<span class="badge b-ok">{{if eq .Result "passed"}}passed{{else}}done{{end}}</span>
-        {{else if eq .Result "failed"}}<span class="badge b-bad">failed</span>
-        {{else if eq .Result "skipped"}}<span class="badge b-mute">skipped</span>
-        {{else}}<span class="badge b-bad">error</span>{{end}}
-        {{if .Detail}}<div class="hint">{{.Detail}}</div>{{end}}
-      </td>
-    </tr>
-    {{end}}
-  </table></div>
-  {{else}}
-  <p class="muted">Nothing yet. Once a project is watched, open or push to a merge request (or click “Check now” on the Projects page).</p>
-  {{end}}
 </div>
 {{end}}

@@ -1,116 +1,195 @@
+{{define "title"}}Settings · repoguard{{end}}
+{{define "head"}}
+<div class="page-head">
+  <div>
+    <h1>Settings</h1>
+    <p>Connections and integrations. Values are stored in <code>settings.json</code> on the machine running repoguard, and saved tokens are never shown again.</p>
+  </div>
+</div>
+{{end}}
 {{define "content"}}
-<h1>Connections</h1>
-<p class="lead">Enter these once and repoguard remembers them. Tokens are stored in <code>data/settings.json</code> on the machine running repoguard.</p>
-
-<div class="card">
-  <h2>GitLab {{if .GitLab.User}}<span class="badge b-ok">Connected · @{{.GitLab.User}}</span>{{else if .GitLab.Err}}<span class="badge b-bad">Error</span>{{end}}</h2>
-  {{if .GitLab.Err}}<div class="flash err">{{.GitLab.Err}}</div>{{end}}
-  {{if .Locked.gitlab}}
-    <p class="muted">Configured by the <code>GITLAB_URL</code> / <code>GITLAB_TOKEN</code> environment variables.</p>
-  {{else}}
-  <form method="post" action="/connect">
-    <input type="hidden" name="section" value="gitlab">
-    <label for="gl-url">GitLab URL</label>
-    <input id="gl-url" type="url" name="gitlab_url" value="{{if .S.GitLabURL}}{{.S.GitLabURL}}{{else}}https://gitlab.com{{end}}" required>
-    <div class="hint">For example <code>https://gitlab.com</code> or your company's <code>https://gitlab.example.com</code>.</div>
-    <label for="gl-token">Access token</label>
-    <input id="gl-token" type="password" name="gitlab_token" autocomplete="off" placeholder="{{if .S.GitLabToken}}•••••• saved, leave empty to keep it{{else}}glpat-...{{end}}">
-    <div class="hint">Create one in GitLab under avatar → <b>Preferences → Access tokens</b> with the <b>api</b> scope.</div>
-    <p class="row"><button type="submit">Save &amp; test</button>
-    {{if .S.GitLabToken}}<button class="danger small" type="submit" name="clear" value="1">Disconnect</button>{{end}}</p>
-  </form>
-  {{end}}
-</div>
-
-<div class="card">
-  <h2>GitHub {{if .GitHub.User}}<span class="badge b-ok">Connected · @{{.GitHub.User}}</span>{{else if .GitHub.Err}}<span class="badge b-bad">Error</span>{{end}}</h2>
-  {{if .GitHub.Err}}<div class="flash err">{{.GitHub.Err}}</div>{{end}}
-  {{if .Locked.github}}
-    <p class="muted">Configured by environment variables (GitHub App or <code>GITHUB_TOKEN</code>).</p>
-  {{else}}
-  <form method="post" action="/connect">
-    <input type="hidden" name="section" value="github">
-    <label for="gh-token">Personal access token</label>
-    <input id="gh-token" type="password" name="github_token" autocomplete="off" placeholder="{{if .S.GitHubToken}}•••••• saved, leave empty to keep it{{else}}github_pat_...{{end}}">
-    <div class="hint">GitHub → Settings → Developer settings → <b>Fine-grained tokens</b>. Permissions: Contents read; Pull requests, Issues and Commit statuses read &amp; write; Webhooks read &amp; write (for webhook mode).</div>
-    <label for="gh-api">API URL <span class="muted">(change only for GitHub Enterprise)</span></label>
-    <input id="gh-api" type="url" name="github_api_url" value="{{if .S.GitHubAPIURL}}{{.S.GitHubAPIURL}}{{else}}https://api.github.com{{end}}">
-    <p class="row"><button type="submit">Save &amp; test</button>
-    {{if .S.GitHubToken}}<button class="danger small" type="submit" name="clear" value="1">Disconnect</button>{{end}}</p>
-  </form>
-  {{end}}
-</div>
-
-<div class="card">
-  <h2>AI review <span class="muted">(optional)</span> {{if .AI}}<span class="badge b-ok">On</span>{{end}}</h2>
-  {{if .Locked.ai}}
-    <p class="muted">Using <code>ANTHROPIC_API_KEY</code> from the environment.</p>
-  {{else}}
-  <form method="post" action="/connect">
-    <input type="hidden" name="section" value="ai">
-    <label for="ai-key">Anthropic API key</label>
-    <input id="ai-key" type="password" name="anthropic_key" autocomplete="off" placeholder="{{if .S.AnthropicKey}}•••••• saved{{else}}sk-ant-...{{end}}">
-    <div class="hint">With a key, Claude reads each diff and leaves inline review comments. Everything else works without one.</div>
-    <p class="row"><button type="submit">Save</button>
-    {{if .S.AnthropicKey}}<button class="danger small" type="submit" name="clear" value="1">Turn off AI review</button>{{end}}</p>
-  </form>
-  {{end}}
-</div>
-
-<div class="card">
-  <h2>Where CI builds run {{if .Ex.Available}}<span class="badge b-ok">{{if eq .Ex.Backend "jenkins"}}Jenkins{{else}}Docker{{end}} · ready</span>{{else}}<span class="badge b-mute">Not ready</span>{{end}}</h2>
-  <p class="muted">Used by projects with CI builds turned on (for example when GitLab pipelines are disabled). {{if not .Ex.Available}}{{.Ex.Reason}}{{end}}</p>
-  {{if .Locked.executor}}
-    <p class="muted">Configured by the <code>REPOGUARD_EXECUTOR</code> environment variable{{if .Ex.Detail}} ({{.Ex.Detail}}){{end}}.</p>
-  {{else}}
-  <form method="post" action="/connect">
-    <input type="hidden" name="section" value="build">
-    <label><input type="radio" name="build_backend" value="docker" {{if ne .S.BuildBackend "jenkins"}}checked{{end}}> Docker on the machine running repoguard</label>
-    <label for="img" style="font-weight:400;margin-left:24px">Build image</label>
-    <input id="img" type="text" name="executor_image" value="{{.S.ExecutorImage}}" placeholder="repoguard-ci:local" style="margin-left:24px;width:calc(100% - 24px)">
-    <label style="margin-top:16px"><input type="radio" name="build_backend" value="jenkins" {{if eq .S.BuildBackend "jenkins"}}checked{{end}}> Jenkins</label>
-    <div style="margin-left:24px">
-      <label for="j-url">Jenkins URL</label>
-      <input id="j-url" type="url" name="jenkins_url" value="{{.S.JenkinsURL}}" placeholder="http://jenkins:8080">
-      <label for="j-user">User</label>
-      <input id="j-user" type="text" name="jenkins_user" value="{{.S.JenkinsUser}}" placeholder="admin">
-      <label for="j-token">API token</label>
-      <input id="j-token" type="password" name="jenkins_token" autocomplete="off" placeholder="{{if .S.JenkinsToken}}•••••• saved, leave empty to keep it{{else}}Jenkins → your user → Configure → API Token{{end}}">
-      <label for="j-job">Job name</label>
-      <input id="j-job" type="text" name="jenkins_job" value="{{.S.JenkinsJob}}" placeholder="repoguard-ci">
-      <div class="hint">A job based on <code>ci-templates/jenkins/Jenkinsfile</code>. The <code>deploy/stack</code> setup creates it for you.</div>
+<form class="card setting" id="gitlab" method="post" action="/connect">
+  <input type="hidden" name="section" value="gitlab">
+  <div class="card-body">
+    <div>
+      <h3>GitLab {{if .GitLab.User}}<span class="pill success">Connected as @{{.GitLab.User}}</span>{{else if .GitLab.Err}}<span class="pill danger">Connection Error</span>{{else}}<span class="pill neutral">Not Connected</span>{{end}}</h3>
+      <p class="desc">repoguard reads merge requests and writes its comments and statuses with this token. A personal token posts as you; a project or group access token posts as a bot.</p>
     </div>
-    <p><button type="submit">Save</button></p>
-  </form>
+    {{if .GitLab.Err}}<div class="note danger">{{.GitLab.Err}}</div>{{end}}
+    {{if .Locked.gitlab}}
+    <p class="secondary">Set by the <code>GITLAB_URL</code> and <code>GITLAB_TOKEN</code> environment variables.</p>
+    {{else}}
+    <div class="fields">
+      <div class="field">
+        <label for="gl-url">Server Address</label>
+        <input id="gl-url" type="url" name="gitlab_url" value="{{if .S.GitLabURL}}{{.S.GitLabURL}}{{else}}https://gitlab.com{{end}}" required>
+      </div>
+      <div class="field">
+        <label for="gl-token">Access Token</label>
+        <input id="gl-token" type="password" name="gitlab_token" autocomplete="off" placeholder="{{if .S.GitLabToken}}Saved. Leave empty to keep it{{else}}glpat-…{{end}}">
+      </div>
+    </div>
+    {{end}}
+  </div>
+  {{if not .Locked.gitlab}}
+  <div class="card-foot">
+    <span>Create the token in GitLab under Edit Profile, Access Tokens, with the <code>api</code> scope.</span>
+    <div class="actions">
+      <button class="btn primary" type="submit">Save Connection</button>
+      {{if .S.GitLabToken}}<button class="btn" type="submit" name="clear" value="1">Disconnect GitLab</button>{{end}}
+    </div>
+  </div>
   {{end}}
-</div>
+</form>
 
-<div class="card">
-  <h2>SonarQube <span class="muted">(optional)</span> {{if .Ex.Sonar}}<span class="badge b-ok">On</span>{{end}}</h2>
-  {{if .Locked.sonar}}
-    <p class="muted">Using <code>SONAR_HOST_URL</code> / <code>SONAR_TOKEN</code> from the environment.</p>
-  {{else}}
-  <form method="post" action="/connect">
-    <input type="hidden" name="section" value="sonar">
-    <label for="s-url">SonarQube URL</label>
-    <input id="s-url" type="url" name="sonar_url" value="{{.S.SonarURL}}" placeholder="http://sonarqube:9000">
-    <label for="s-token">Analysis token</label>
-    <input id="s-token" type="password" name="sonar_token" autocomplete="off" placeholder="{{if .S.SonarToken}}•••••• saved{{else}}squ_... (My Account → Security → Global Analysis Token){{end}}">
-    <div class="hint">For Docker builds, repoguard passes the URL and token into the build so <code>sonar-scanner</code> runs and the Quality Gate shows up on the merge request. For Jenkins builds, set these two variables on Jenkins instead.</div>
-    <p class="row"><button type="submit">Save</button>
-    {{if .S.SonarToken}}<button class="danger small" type="submit" name="clear" value="1">Turn off SonarQube</button>{{end}}</p>
-  </form>
+<form class="card setting" id="github" method="post" action="/connect">
+  <input type="hidden" name="section" value="github">
+  <div class="card-body">
+    <div>
+      <h3>GitHub {{if .GitHub.User}}<span class="pill success">Connected as @{{.GitHub.User}}</span>{{else if .GitHub.Err}}<span class="pill danger">Connection Error</span>{{else}}<span class="pill neutral">Optional</span>{{end}}</h3>
+      <p class="desc">Use it if some projects live on GitHub.</p>
+    </div>
+    {{if .GitHub.Err}}<div class="note danger">{{.GitHub.Err}}</div>{{end}}
+    {{if .Locked.github}}
+    <p class="secondary">Set by environment variables (a GitHub App or <code>GITHUB_TOKEN</code>).</p>
+    {{else}}
+    <div class="fields">
+      <div class="field">
+        <label for="gh-token">Fine-Grained Access Token</label>
+        <input id="gh-token" type="password" name="github_token" autocomplete="off" placeholder="{{if .S.GitHubToken}}Saved. Leave empty to keep it{{else}}github_pat_…{{end}}">
+      </div>
+      <div class="field">
+        <label for="gh-api">API Address</label>
+        <input id="gh-api" type="url" name="github_api_url" value="{{if .S.GitHubAPIURL}}{{.S.GitHubAPIURL}}{{else}}https://api.github.com{{end}}">
+        <span class="help">Change it only for GitHub Enterprise Server.</span>
+      </div>
+    </div>
+    {{end}}
+  </div>
+  {{if not .Locked.github}}
+  <div class="card-foot">
+    <span>Permissions: Contents read; Pull requests, Issues and Commit statuses read and write.</span>
+    <div class="actions">
+      <button class="btn primary" type="submit">Save Connection</button>
+      {{if .S.GitHubToken}}<button class="btn" type="submit" name="clear" value="1">Disconnect GitHub</button>{{end}}
+    </div>
+  </div>
   {{end}}
-</div>
+</form>
 
-<div class="card">
-  <h2>Advanced <span class="muted">(optional)</span></h2>
-  <form method="post" action="/connect">
-    <input type="hidden" name="section" value="advanced">
-    <label for="pub">Public URL of repoguard</label>
-    <input id="pub" type="url" name="public_url" value="{{.S.PublicURL}}" placeholder="https://repoguard.example.com" {{if .Locked.public_url}}disabled{{end}}>
-    <div class="hint">Leave empty and repoguard polls GitLab/GitHub every 30 seconds, which works on a laptop with no open ports. Fill it in and repoguard creates webhooks for instant reactions. Webhook secret: <code>{{.Secret}}</code></div>
-    <p><button type="submit">Save</button></p>
-  </form>
-</div>
+<form class="card setting" id="ai" method="post" action="/connect">
+  <input type="hidden" name="section" value="ai">
+  <div class="card-body">
+    <div>
+      <h3>AI Review {{if .AI}}<span class="pill success">On</span>{{else}}<span class="pill neutral">Off</span>{{end}}</h3>
+      <p class="desc">Claude reads each new diff and leaves inline comments on likely bugs. Every other check works without it.</p>
+    </div>
+    {{if .Locked.ai}}
+    <p class="secondary">Set by the <code>ANTHROPIC_API_KEY</code> environment variable.</p>
+    {{else}}
+    <div class="fields"><div class="field">
+      <label for="ai-key">Anthropic API Key</label>
+      <input id="ai-key" type="password" name="anthropic_key" autocomplete="off" placeholder="{{if .S.AnthropicKey}}Saved. Leave empty to keep it{{else}}sk-ant-…{{end}}">
+    </div></div>
+    {{end}}
+  </div>
+  {{if not .Locked.ai}}
+  <div class="card-foot">
+    <span>Billed to the Anthropic account that owns the key.</span>
+    <div class="actions">
+      <button class="btn primary" type="submit">Save API Key</button>
+      {{if .S.AnthropicKey}}<button class="btn" type="submit" name="clear" value="1">Turn Off AI Review</button>{{end}}
+    </div>
+  </div>
+  {{end}}
+</form>
+
+<form class="card setting" id="builds" method="post" action="/connect">
+  <input type="hidden" name="section" value="build">
+  <div class="card-body">
+    <div>
+      <h3>Build &amp; Tests {{if .Ex.Available}}<span class="pill success">{{if eq .Ex.Backend "jenkins"}}Jenkins{{else}}Docker{{end}}</span>{{else}}<span class="pill neutral">Unavailable</span>{{end}}</h3>
+      <p class="desc">For projects whose own pipelines are disabled, repoguard builds and tests each new commit itself. Turn it on per project in Projects.{{if not .Ex.Available}} {{.Ex.Reason}}{{end}}</p>
+    </div>
+    {{if .Locked.executor}}
+    <p class="secondary">Set by the <code>REPOGUARD_EXECUTOR</code> environment variable{{if .Ex.Detail}} ({{.Ex.Detail}}){{end}}.</p>
+    {{else}}
+    <div class="fields">
+      <label class="choice">
+        <input type="radio" name="build_backend" value="docker" {{if ne .S.BuildBackend "jenkins"}}checked{{end}}>
+        <span><b>Docker on This Machine</b><span class="help">Each build runs in a throwaway container that receives no credentials.</span></span>
+      </label>
+      <div class="indent">
+        <div class="field">
+          <label for="img">Build Image</label>
+          <input id="img" type="text" name="executor_image" value="{{.S.ExecutorImage}}" placeholder="ghcr.io/dpvinh30092005/repoguard-ci:1">
+          <span class="help">Leave empty for the default image.</span>
+        </div>
+      </div>
+      <label class="choice">
+        <input type="radio" name="build_backend" value="jenkins" {{if eq .S.BuildBackend "jenkins"}}checked{{end}}>
+        <span><b>Jenkins</b><span class="help">A job based on <code>ci-templates/jenkins/Jenkinsfile</code>. The <code>deploy/stack</code> setup creates one.</span></span>
+      </label>
+      <div class="indent">
+        <div class="field"><label for="j-url">Jenkins Address</label><input id="j-url" type="url" name="jenkins_url" value="{{.S.JenkinsURL}}" placeholder="http://jenkins:8080"></div>
+        <div class="field"><label for="j-user">User</label><input id="j-user" type="text" name="jenkins_user" value="{{.S.JenkinsUser}}" placeholder="admin"></div>
+        <div class="field"><label for="j-token">API Token</label><input id="j-token" type="password" name="jenkins_token" autocomplete="off" placeholder="{{if .S.JenkinsToken}}Saved. Leave empty to keep it{{else}}From your Jenkins user, Configure, API Token{{end}}"></div>
+        <div class="field"><label for="j-job">Job Name</label><input id="j-job" type="text" name="jenkins_job" value="{{.S.JenkinsJob}}" placeholder="repoguard-ci"></div>
+      </div>
+    </div>
+    {{end}}
+  </div>
+  {{if not .Locked.executor}}
+  <div class="card-foot">
+    <span>Only merge requests from authors who can push to the project are built.</span>
+    <div class="actions"><button class="btn primary" type="submit">Save Build Settings</button></div>
+  </div>
+  {{end}}
+</form>
+
+<form class="card setting" id="sonar" method="post" action="/connect">
+  <input type="hidden" name="section" value="sonar">
+  <div class="card-body">
+    <div>
+      <h3>SonarQube {{if .Ex.Sonar}}<span class="pill success">On</span>{{else}}<span class="pill neutral">Off</span>{{end}}</h3>
+      <p class="desc">Docker builds run <code>sonar-scanner</code> and report the Quality Gate. For Jenkins builds, set these two values on Jenkins instead.</p>
+    </div>
+    {{if .Locked.sonar}}
+    <p class="secondary">Set by the <code>SONAR_HOST_URL</code> and <code>SONAR_TOKEN</code> environment variables.</p>
+    {{else}}
+    <div class="fields">
+      <div class="field"><label for="s-url">SonarQube Address</label><input id="s-url" type="url" name="sonar_url" value="{{.S.SonarURL}}" placeholder="http://sonarqube:9000"></div>
+      <div class="field"><label for="s-token">Analysis Token</label><input id="s-token" type="password" name="sonar_token" autocomplete="off" placeholder="{{if .S.SonarToken}}Saved. Leave empty to keep it{{else}}squ_…{{end}}"></div>
+    </div>
+    {{end}}
+  </div>
+  {{if not .Locked.sonar}}
+  <div class="card-foot">
+    <span>Create the token in SonarQube under My Account, Security.</span>
+    <div class="actions">
+      <button class="btn primary" type="submit">Save SonarQube Settings</button>
+      {{if .S.SonarToken}}<button class="btn" type="submit" name="clear" value="1">Turn Off SonarQube</button>{{end}}
+    </div>
+  </div>
+  {{end}}
+</form>
+
+<form class="card setting" id="delivery" method="post" action="/connect">
+  <input type="hidden" name="section" value="advanced">
+  <div class="card-body">
+    <div>
+      <h3>Public Address</h3>
+      <p class="desc">Leave it empty and repoguard asks for changes every 30 seconds, which works on a laptop with no open port. With an address GitLab can reach, it creates webhooks and reacts at once.</p>
+    </div>
+    <div class="fields"><div class="field">
+      <label for="pub">repoguard's Public Address</label>
+      <input id="pub" type="url" name="public_url" value="{{if .Locked.public_url}}{{.PublicURL}}{{else}}{{.S.PublicURL}}{{end}}" placeholder="https://repoguard.example.com" {{if .Locked.public_url}}disabled{{end}}>
+      {{if .Locked.public_url}}<span class="help">Set by the <code>REPOGUARD_PUBLIC_URL</code> environment variable.</span>{{end}}
+    </div></div>
+  </div>
+  <div class="card-foot">
+    <span>Webhook secret: <code>{{.Secret}}</code></span>
+    <div class="actions"><button class="btn primary" type="submit" {{if .Locked.public_url}}disabled{{end}}>Save Address</button></div>
+  </div>
+</form>
 {{end}}

@@ -20,6 +20,7 @@ import (
 	"github.com/dpvinh30092005/repoguard/internal/metrics"
 	"github.com/dpvinh30092005/repoguard/internal/platform"
 	"github.com/dpvinh30092005/repoguard/internal/queue"
+	"github.com/dpvinh30092005/repoguard/internal/results"
 	"github.com/dpvinh30092005/repoguard/internal/triage"
 )
 
@@ -38,12 +39,15 @@ const (
 )
 
 type Engine struct {
-	Clients   *platform.Registry
-	Activity  *activity.Log // optional: feeds the web UI
-	Checks    []checks.Check
-	Log       *slog.Logger
-	Metrics   *metrics.Registry
-	PublicURL string
+	Clients  *platform.Registry
+	Activity *activity.Log  // optional: feeds the web UI
+	Results  *results.Store // optional: latest result per change request, for the web UI
+	Checks   []checks.Check
+	Log      *slog.Logger
+	Metrics  *metrics.Registry
+	// PublicURL returns repoguard's public address (may be empty). Statuses
+	// and comments link to the change request's page in the web console.
+	PublicURL func() string
 	Now       func() time.Time
 	// Executor, when set, builds change requests for repos without working CI.
 	Executor Submitter
@@ -152,6 +156,7 @@ func (e *Engine) handleChangeRequest(ctx context.Context, c platform.Client, ev 
 		return err
 	}
 	if cr.State != "open" {
+		e.Results.SetState(repo, cr.Number, cr.State)
 		*out = outcome{"skipped", "no longer open"}
 		return nil
 	}
@@ -186,23 +191,28 @@ func (e *Engine) handleChangeRequest(ctx context.Context, c platform.Client, ev 
 		selected = append(selected, ch)
 	}
 	for _, ch := range selected {
-		if err := e.setStatus(ctx, c, repo, cr.HeadSHA, platform.Status{Context: statusPrefix + ch.Name(), State: platform.StatePending, Description: "Running…", TargetURL: e.PublicURL}); err != nil {
+		if err := e.setStatus(ctx, c, repo, cr.HeadSHA, platform.Status{Context: statusPrefix + ch.Name(), State: platform.StatePending, Description: "Running…", TargetURL: e.consoleURL(repo, cr.Number)}); err != nil {
 			return err
 		}
 	}
 
 	results := e.runChecks(ctx, selected, checks.Input{Repo: repo, CR: cr, Files: files, Config: cfg})
 	*out = summarize(results)
+	skippedNames := make([]string, len(skipped))
+	for i, ch := range skipped {
+		skippedNames[i] = ch.Name()
+	}
+	e.Results.RecordChecks(repo, cr, cr.URL, results, skippedNames, cfgWarning)
 
 	// Idempotent writes first (statuses, sticky comment), the non-idempotent
 	// inline review last, so a retry after a partial failure can't double-post.
 	for _, r := range results {
-		st := platform.Status{Context: statusPrefix + r.Check, State: r.State, Description: r.Summary, TargetURL: e.PublicURL}
+		st := platform.Status{Context: statusPrefix + r.Check, State: r.State, Description: r.Summary, TargetURL: e.consoleURL(repo, cr.Number)}
 		if err := e.setStatus(ctx, c, repo, cr.HeadSHA, st); err != nil {
 			return err
 		}
 	}
-	if err := c.UpsertComment(ctx, repo, platform.CR(cr.Number), markerSummary, renderSummary(cr, results, skipped, cfgWarning)); err != nil {
+	if err := c.UpsertComment(ctx, repo, platform.CR(cr.Number), markerSummary, e.renderSummary(repo, cr, results, skipped, cfgWarning)); err != nil {
 		return err
 	}
 	if ev.Type == platform.EventCROpened && cfg.Issues.Link.Enabled {
@@ -229,7 +239,7 @@ func summarize(results []checks.Result) outcome {
 	var failing []string
 	for _, r := range results {
 		if r.State == platform.StateFailure || r.State == platform.StateError {
-			failing = append(failing, r.Check+": "+r.Summary)
+			failing = append(failing, checks.Label(r.Check)+": "+r.Summary)
 		}
 	}
 	if len(failing) > 0 {
@@ -300,7 +310,7 @@ func (e *Engine) postInline(ctx context.Context, c platform.Client, repo platfor
 func inlineBody(check string, f checks.Finding) string {
 	sum := sha1.Sum([]byte(check + "|" + f.Path + "|" + f.Message))
 	fp := hex.EncodeToString(sum[:6])
-	return fmt.Sprintf("<!-- repoguard:fp=%s -->\n**repoguard · %s**\n\n%s", fp, check, f.Message)
+	return fmt.Sprintf("<!-- repoguard:fp=%s -->\n**repoguard · %s**\n\n%s", fp, checks.Label(check), f.Message)
 }
 
 func fingerprintIn(body string) string {
@@ -312,47 +322,90 @@ func fingerprintIn(body string) string {
 	return fp
 }
 
-var stateIcon = map[platform.State]string{
-	platform.StateSuccess: "✅", platform.StateFailure: "❌", platform.StateError: "⚠️", platform.StatePending: "⏳",
+// consoleURL is the change request's page in the web console, if reachable.
+func (e *Engine) consoleURL(repo platform.Repo, number int) string {
+	if e.PublicURL == nil {
+		return ""
+	}
+	base := strings.TrimRight(e.PublicURL(), "/")
+	if base == "" {
+		return ""
+	}
+	return base + "/merge-requests/" + results.IDFor(string(repo.Platform), repo.FullName, number)
 }
 
-var severityIcon = map[checks.Severity]string{
-	checks.SeverityError: "❌", checks.SeverityWarning: "⚠️", checks.SeverityInfo: "ℹ️",
+// resultWord is how a check state reads in a comment.
+var resultWord = map[platform.State]string{
+	platform.StateSuccess: "Passed", platform.StateFailure: "**Failed**", platform.StateError: "**Error**", platform.StatePending: "Running",
 }
 
-func renderSummary(cr *platform.ChangeRequest, results []checks.Result, skipped []checks.Check, cfgWarning string) string {
+func (e *Engine) renderSummary(repo platform.Repo, cr *platform.ChangeRequest, res []checks.Result, skipped []checks.Check, cfgWarning string) string {
+	failed := 0
+	for _, r := range res {
+		if r.State == platform.StateFailure || r.State == platform.StateError {
+			failed++
+		}
+	}
 	var b strings.Builder
-	b.WriteString(markerSummary + "\n### 🛡️ repoguard\n\n")
+	b.WriteString(markerSummary + "\n")
+	switch {
+	case failed == 0:
+		fmt.Fprintf(&b, "#### repoguard · all %d checks passed\n\n", len(res))
+	case failed == 1:
+		fmt.Fprintf(&b, "#### repoguard · 1 of %d checks failed\n\n", len(res))
+	default:
+		fmt.Fprintf(&b, "#### repoguard · %d of %d checks failed\n\n", failed, len(res))
+	}
 	if cfgWarning != "" {
 		b.WriteString("> [!WARNING]\n> " + cfgWarning + "\n\n")
 	}
-	b.WriteString("| Check | Result | Details |\n|---|---|---|\n")
-	for _, r := range results {
-		fmt.Fprintf(&b, "| `%s` | %s %s | %s |\n", r.Check, stateIcon[r.State], r.State, r.Summary)
+	b.WriteString("| Check | Result | Summary |\n| :-- | :-- | :-- |\n")
+	for _, r := range res {
+		fmt.Fprintf(&b, "| %s | %s | %s |\n", checks.Label(r.Check), resultWord[r.State], r.Summary)
 	}
 	for _, ch := range skipped {
-		fmt.Fprintf(&b, "| `%s` | ⏭️ skipped | Runs when new commits are pushed |\n", ch.Name())
+		fmt.Fprintf(&b, "| %s | Not run | Runs when new commits are pushed |\n", checks.Label(ch.Name()))
 	}
-	for _, r := range results {
+	for _, r := range res {
 		var lines []string
+		n := 0
 		for _, f := range r.Findings {
 			if f.Inline() {
-				continue // shown as inline review comments
+				continue // posted as inline review comments
 			}
-			lines = append(lines, fmt.Sprintf("- %s %s", severityIcon[f.Severity], f.Message))
+			switch f.Severity {
+			case checks.SeverityError:
+				n++
+				lines = append(lines, fmt.Sprintf("%d. %s", n, f.Message))
+			case checks.SeverityWarning:
+				lines = append(lines, "- Warning: "+f.Message)
+			default:
+				lines = append(lines, "- Note: "+f.Message)
+			}
 		}
 		if len(lines) == 0 && r.Details == "" {
 			continue
 		}
-		fmt.Fprintf(&b, "\n#### %s\n", r.Check)
+		info := checks.Lookup(r.Check)
+		fmt.Fprintf(&b, "\n**%s**\n\n", info.Label)
 		if len(lines) > 0 {
 			b.WriteString(strings.Join(lines, "\n") + "\n")
 		}
 		if r.Details != "" {
-			b.WriteString("\n" + r.Details + "\n")
+			if len(lines) > 0 {
+				b.WriteString("\n")
+			}
+			b.WriteString(r.Details + "\n")
+		}
+		if (r.State == platform.StateFailure) && info.Fix != "" {
+			b.WriteString("\n<sub>How to fix: " + info.Fix + "</sub>\n")
 		}
 	}
-	fmt.Fprintf(&b, "\n<sub>Commit %s · policy from `%s` on the default branch · build/test/vulnerability scan run in your CI pipeline (`repoguard ci`).</sub>\n", short(cr.HeadSHA), config.FileName)
+	footer := fmt.Sprintf("Commit `%s` · rules from `%s` on the default branch", short(cr.HeadSHA), config.FileName)
+	if u := e.consoleURL(repo, cr.Number); u != "" {
+		footer += fmt.Sprintf(" · [Open in repoguard](%s)", u)
+	}
+	b.WriteString("\n<sub>" + footer + "</sub>\n")
 	return b.String()
 }
 
@@ -373,7 +426,7 @@ func (e *Engine) linkIssues(ctx context.Context, c platform.Client, repo platfor
 			continue
 		}
 		marker := fmt.Sprintf("<!-- repoguard:linked-cr-%d -->", cr.Number)
-		body := fmt.Sprintf("%s\n🔗 Being worked on in %s [%s](%s) by @%s.", marker, crNoun(repo), cr.Title, cr.URL, cr.Author)
+		body := fmt.Sprintf("%s\nBeing worked on in %s [%s](%s) by @%s.", marker, crNoun(repo), cr.Title, cr.URL, cr.Author)
 		if err := c.UpsertComment(ctx, repo, platform.IssueT(n), marker, body); err != nil {
 			return err
 		}
@@ -388,6 +441,7 @@ func (e *Engine) linkIssues(ctx context.Context, c platform.Client, repo platfor
 
 func (e *Engine) handleMerged(ctx context.Context, c platform.Client, ev platform.Event) error {
 	repo := ev.Repo
+	e.Results.SetState(repo, ev.Number, "merged")
 	cfg, _, err := e.loadConfig(ctx, c, repo)
 	if err != nil || !cfg.Issues.Link.Enabled {
 		return err
@@ -422,7 +476,7 @@ func (e *Engine) handleMerged(ctx context.Context, c platform.Client, ev platfor
 		}
 		// Platforms auto-close only on merges into the default branch; this covers release branches too.
 		if closing[n] && cfg.Issues.Link.CloseOnMerge && issue.State == "open" {
-			body := fmt.Sprintf("%s\n✅ Closed by merged %s [%s](%s).", markerClosed, crNoun(repo), cr.Title, cr.URL)
+			body := fmt.Sprintf("%s\nClosed by %s [%s](%s), which was merged.", markerClosed, crNoun(repo), cr.Title, cr.URL)
 			if err := c.UpsertComment(ctx, repo, platform.IssueT(n), markerClosed, body); err != nil {
 				return err
 			}
@@ -464,8 +518,8 @@ func (e *Engine) handleIssue(ctx context.Context, c platform.Client, ev platform
 
 	switch {
 	case a.IsBug && len(a.MissingSections) > 0:
-		body := fmt.Sprintf("%s\n👋 Thanks for the report, @%s! To help us triage it, please edit the issue and add:\n\n%s\n\n"+
-			"I'll update this comment once the information is there.", markerNeedsInfo, issue.Author, bullets(a.MissingSections))
+		body := fmt.Sprintf("%s\nThanks for the report, @%s. To triage it we need a few more details. Please edit the issue and add:\n\n%s\n\n"+
+			"This comment updates itself once they are there.", markerNeedsInfo, issue.Author, bullets(a.MissingSections))
 		if err := c.UpsertComment(ctx, repo, target, markerNeedsInfo, body); err != nil {
 			return err
 		}
@@ -478,7 +532,7 @@ func (e *Engine) handleIssue(ctx context.Context, c platform.Client, ev platform
 		if err := c.RemoveLabel(ctx, repo, target, ic.NeedsInfoLabel); err != nil {
 			return err
 		}
-		if err := c.UpsertComment(ctx, repo, target, markerNeedsInfo, markerNeedsInfo+"\n✅ Thanks, the report now has everything we need."); err != nil {
+		if err := c.UpsertComment(ctx, repo, target, markerNeedsInfo, markerNeedsInfo+"\nThanks, the report now has everything needed for triage."); err != nil {
 			return err
 		}
 	}
@@ -493,7 +547,7 @@ func (e *Engine) handleIssue(ctx context.Context, c platform.Client, ev platform
 			for _, d := range dups {
 				lines = append(lines, fmt.Sprintf("- #%d %s (%.0f%% similar)", d.Issue.Number, d.Issue.Title, d.Score*100))
 			}
-			body := fmt.Sprintf("%s\n🔎 This looks similar to:\n\n%s\n\nIf it's the same problem, please add details there and close this one.",
+			body := fmt.Sprintf("%s\nThis issue may be a duplicate of:\n\n%s\n\nIf it is the same problem, add your details there and close this one.",
 				markerDuplicates, strings.Join(lines, "\n"))
 			if err := c.UpsertComment(ctx, repo, target, markerDuplicates, body); err != nil {
 				return err
@@ -564,7 +618,7 @@ func (e *Engine) SweepRepo(ctx context.Context, repo platform.Repo) error {
 		t := platform.IssueT(issue.Number)
 		switch triage.StaleDecision(issue, st, now) {
 		case triage.StaleMark:
-			body := fmt.Sprintf("%s\n💤 No activity for %d days, so this is now marked `%s`.", markerStale, st.DaysUntilStale, st.Label)
+			body := fmt.Sprintf("%s\nNo activity for %d days, so this issue is now labelled `%s`.", markerStale, st.DaysUntilStale, st.Label)
 			if st.DaysUntilClose > 0 {
 				body += fmt.Sprintf(" It will be closed in %d days unless someone comments.", st.DaysUntilClose)
 			}
@@ -576,7 +630,7 @@ func (e *Engine) SweepRepo(ctx context.Context, repo platform.Repo) error {
 			}
 			marked++
 		case triage.StaleClose:
-			body := fmt.Sprintf("%s\n🔒 Closed after %d more days without activity. Comment or reopen if it's still relevant.", markerStale, st.DaysUntilClose)
+			body := fmt.Sprintf("%s\nClosed after %d more days without activity. Reopen it or comment if it is still relevant.", markerStale, st.DaysUntilClose)
 			if err := c.UpsertComment(ctx, repo, t, markerStale, body); err != nil {
 				return err
 			}
@@ -587,7 +641,7 @@ func (e *Engine) SweepRepo(ctx context.Context, repo platform.Repo) error {
 		}
 		if triage.SLABreached(issue, sla, now) {
 			// Deterministic body: re-sweeping finds an identical comment and does nothing.
-			body := fmt.Sprintf("%s\n🚨 High-priority issue without an assignee for more than %dh. Maintainers, please pick it up.", markerSLA, sla.HoursWithoutAssignee)
+			body := fmt.Sprintf("%s\nThis high-priority issue has had no assignee for more than %dh. A maintainer should pick it up.", markerSLA, sla.HoursWithoutAssignee)
 			if err := c.UpsertComment(ctx, repo, t, markerSLA, body); err != nil {
 				return err
 			}

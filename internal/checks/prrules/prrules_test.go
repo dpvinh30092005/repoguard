@@ -42,7 +42,7 @@ func TestBadPullRequestFails(t *testing.T) {
 		msgs = append(msgs, string(f.Severity)+": "+f.Message)
 	}
 	all := strings.Join(msgs, "\n")
-	for _, want := range []string{"error: Title", "error: Description is too short (3 chars", "error: No linked issue", "warning: Large change: 900"} {
+	for _, want := range []string{"error: The title does not follow", "error: The description is too short (3 characters", "error: No linked issue", "warning: Large change: 900"} {
 		if !strings.Contains(all, want) {
 			t.Errorf("missing %q in:\n%s", want, all)
 		}

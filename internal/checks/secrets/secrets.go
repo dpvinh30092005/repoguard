@@ -133,9 +133,12 @@ func (Check) Run(_ context.Context, in checks.Input) (checks.Result, error) {
 			}
 		}
 	}
-	res := checks.Result{Check: "secrets", State: checks.StateFor(findings), Findings: findings, Summary: "No secrets in added lines"}
+	res := checks.Result{Check: "secrets", State: checks.StateFor(findings), Findings: findings, Summary: "No secrets in the added lines"}
 	if len(findings) > 0 {
-		res.Summary = fmt.Sprintf("%d possible secret(s) in added lines", len(findings))
+		res.Summary = "1 possible secret in the added lines"
+		if len(findings) > 1 {
+			res.Summary = fmt.Sprintf("%d possible secrets in the added lines", len(findings))
+		}
 	}
 	return res, nil
 }

@@ -1,60 +1,78 @@
+{{define "title"}}Projects · repoguard{{end}}
+{{define "head"}}
+<div class="page-head">
+  <div>
+    <h1>Projects</h1>
+    <p>Choose which projects repoguard checks. {{if .PublicURL}}Changes arrive by webhook at <code>{{.PublicURL}}</code>.{{else}}repoguard asks for changes every 30 seconds, so no webhook or open port is needed.{{end}}</p>
+  </div>
+  {{if .Groups}}
+  <form class="search" method="get" action="/repos" role="search">
+    <label class="sr-only" for="q">Filter projects</label>
+    <input id="q" type="search" name="q" value="{{.Q}}" placeholder="Filter by name…">
+  </form>
+  {{end}}
+</div>
+{{end}}
 {{define "content"}}
-<h1>Projects</h1>
-<p class="lead">repoguard checks the merge requests and issues of every project you start checking.
-{{if .PublicURL}}Events arrive by webhook at <code>{{.PublicURL}}</code>.{{else}}Current mode: polling every 30 seconds (no webhook needed).{{end}}</p>
-
 {{if not .Groups}}
-<div class="card"><p>Neither GitLab nor GitHub is connected yet. <a href="/connect">Connect now →</a></p></div>
-{{else}}
-<form class="row" method="get" action="/repos" style="margin-bottom:16px">
-  <input type="search" name="q" value="{{.Q}}" placeholder="Filter projects by name..." style="max-width:360px">
-  <button class="ghost" type="submit">Filter</button>
-</form>
+<div class="card"><div class="empty">
+  <h3>No Projects Yet</h3>
+  <p>Connect GitLab or GitHub to list every project the token can access.</p>
+  <a class="btn primary" href="/connect">Connect GitLab</a>
+</div></div>
 {{end}}
 
 {{range .Groups}}
 <div class="card">
-  <h2>{{if eq (printf "%s" .Kind) "gitlab"}}GitLab{{else}}GitHub{{end}} <span class="muted">· {{.Total}} project(s) you can access</span></h2>
-  {{if .Err}}<div class="flash err">Could not load the project list: {{.Err}}</div>{{end}}
+  <div class="card-head">
+    <h2>{{platformName (printf "%s" .Kind)}}</h2>
+    <span class="sub">{{.Total}} {{plural .Total "project" "projects"}} accessible</span>
+  </div>
+  {{if .Err}}<div class="card-body"><div class="note danger">Could not load the project list: {{.Err}}. Check the connection in Settings.</div></div>{{end}}
   {{if .Rows}}
-  <div class="scroll"><table>
-    <tr><th>Project</th><th>Status</th><th>CI builds</th><th></th></tr>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Project</th><th>Checking</th><th class="col-check">Open Merge Requests</th><th>Build &amp; Tests</th><th class="right">Actions</th></tr></thead>
+    <tbody>
     {{range .Rows}}
     <tr>
-      <td><b>{{.Repo.FullName}}</b></td>
+      <td><span class="title">{{.Repo.FullName}}</span><span class="meta">Default branch {{if .Repo.DefaultBranch}}<code>{{.Repo.DefaultBranch}}</code>{{else}}unknown{{end}}</span></td>
       <td>
+        {{if .Watched}}<span class="pill success">On</span> <span class="muted nowrap">{{if eq .Watched.Mode "webhook"}}Webhook{{else}}Every 30 s{{end}}</span>
+        {{else}}<span class="pill neutral">Off</span>{{end}}
+      </td>
+      <td class="col-check">
         {{if .Watched}}
-          <span class="badge b-ok">Checking</span>
-          <span class="hint">{{if eq .Watched.Mode "webhook"}}webhook{{else}}polling every 30s{{end}}</span>
-        {{else}}<span class="badge b-mute">Off</span>{{end}}
+          {{if .Open}}<a href="/merge-requests?q={{.Repo.FullName}}">{{.Open}} checked</a>{{if .Failing}} <span class="pill danger">{{.Failing}} Failing</span>{{end}}
+          {{else}}<span class="muted">None checked yet</span>{{end}}
+        {{else}}<span class="muted">–</span>{{end}}
       </td>
       <td>
         {{if .Watched}}
           {{if $.Ex.Available}}
           <form class="inline" method="post" action="/repos/executor">
             {{template "repofields" .Repo}}
-            {{if .Watched.Executor}}<button class="small" type="submit" title="Click to turn off">✓ On</button>
-            {{else}}<button class="ghost small" type="submit">Turn on</button>{{end}}
+            {{if .Watched.Executor}}<span class="pill success">On</span> <button class="btn tertiary sm" type="submit">Turn Off Builds</button>
+            {{else}}<span class="pill neutral">Off</span> <button class="btn tertiary sm" type="submit">Turn On Builds</button>{{end}}
           </form>
-          {{else}}<span class="muted" title="{{$.Ex.Reason}}">unavailable</span>{{end}}
+          {{else}}<span class="muted" title="{{$.Ex.Reason}}">Unavailable</span>{{end}}
         {{else}}<span class="muted">–</span>{{end}}
       </td>
-      <td style="text-align:right;white-space:nowrap">
+      <td class="right nowrap">
         {{if .Watched}}
-          <form class="inline" method="post" action="/repos/check">{{template "repofields" .Repo}}<button class="ghost small" type="submit">Check now</button></form>
-          <form class="inline" method="post" action="/repos/unwatch">{{template "repofields" .Repo}}<button class="danger small" type="submit">Stop</button></form>
+          <form class="inline" method="post" action="/repos/check">{{template "repofields" .Repo}}<button class="btn sm" type="submit">Run Checks</button></form>
+          <form class="inline" method="post" action="/repos/unwatch">{{template "repofields" .Repo}}<button class="btn tertiary sm" type="submit">Stop Checking</button></form>
         {{else}}
-          <form class="inline" method="post" action="/repos/watch">{{template "repofields" .Repo}}<button class="small" type="submit">Start checking</button></form>
+          <form class="inline" method="post" action="/repos/watch">{{template "repofields" .Repo}}<button class="btn primary sm" type="submit">Start Checking</button></form>
         {{end}}
       </td>
     </tr>
     {{end}}
+    </tbody>
   </table></div>
-  {{else if not .Err}}<p class="muted">No matching projects.</p>{{end}}
+  {{else if not .Err}}<div class="empty"><p>No project matches this filter.</p></div>{{end}}
+  {{if not $.Ex.Available}}<div class="card-foot"><span>Build &amp; Tests are unavailable: {{$.Ex.Reason}}</span><a class="btn sm" href="/connect#builds">Configure Builds</a></div>{{end}}
 </div>
 {{end}}
-
-{{if not .Ex.Available}}<p class="hint">CI builds are unavailable: {{.Ex.Reason}} (<a href="/connect">configure</a>)</p>{{end}}
 {{end}}
 
 {{define "repofields"}}

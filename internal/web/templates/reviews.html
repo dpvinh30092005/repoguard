@@ -1,0 +1,73 @@
+{{define "title"}}Merge Requests · repoguard{{end}}
+{{define "head"}}
+<div class="page-head">
+  <div>
+    <h1>Merge Requests</h1>
+    <p>The latest result of every check for each merge request. Select one to see what is wrong and how to fix it.</p>
+  </div>
+</div>
+{{end}}
+{{define "content"}}
+<div class="card">
+  <div class="toolbar">
+    <nav class="switch" aria-label="Filter">
+      <a href="/merge-requests" {{if eq .View "open"}}class="on"{{end}}>Open <span class="n">{{.Counts.Open}}</span></a>
+      <a href="/merge-requests?view=failing" {{if eq .View "failing"}}class="on"{{end}}>Failing <span class="n">{{.Counts.Failing}}</span></a>
+      <a href="/merge-requests?view=passing" {{if eq .View "passing"}}class="on"{{end}}>Passing <span class="n">{{.Counts.Passing}}</span></a>
+      <a href="/merge-requests?view=closed" {{if eq .View "closed"}}class="on"{{end}}>Merged or Closed <span class="n">{{.Counts.Closed}}</span></a>
+    </nav>
+    <form class="search" method="get" action="/merge-requests" role="search">
+      {{if ne .View "open"}}<input type="hidden" name="view" value="{{.View}}">{{end}}
+      <label class="sr-only" for="q">Search merge requests</label>
+      <input id="q" type="search" name="q" value="{{.Q}}" placeholder="Search by title, project or author…">
+    </form>
+  </div>
+  {{if .Rows}}
+  <div class="table-wrap"><table>
+    <thead><tr>
+      <th>Merge Request</th>
+      <th class="col-result">Result</th>
+      {{range .Columns}}<th class="col-check">{{.Label}}</th>{{end}}
+      <th class="right col-updated">Updated</th>
+    </tr></thead>
+    <tbody>
+    {{range .Rows}}
+    <tr class="link">
+      <td>
+        <a class="stretch title" href="/merge-requests/{{.ID}}">{{.Title}}</a>
+        <span class="mobile-only">{{if .State.Text}}<span class="pill {{.State.Class}}">{{.State.Text}}</span>{{else}}<span class="pill {{.Overall.Class}}">{{.Overall.Text}}</span>{{end}}</span>
+        <span class="meta">{{.Repo}} · {{ref .Platform .Number}} · @{{.Author}}{{if .Branch}} · {{.Branch}}{{end}}</span>
+        {{if .Reason}}<span class="reason clamp">{{md .Reason}}{{if .More}} <span class="muted">and {{.More}} more</span>{{end}}</span>{{end}}
+      </td>
+      <td class="col-result">{{if .State.Text}}<span class="pill {{.State.Class}}">{{.State.Text}}</span>{{else}}<span class="pill {{.Overall.Class}}">{{.Overall.Text}}</span>{{end}}</td>
+      {{range .Cells}}<td class="col-check">{{if .Class}}<span class="pill {{.Class}}">{{.Text}}</span>{{else}}<span class="muted">–</span>{{end}}</td>{{end}}
+      <td class="right muted nowrap col-updated">{{ago .UpdatedAt}}</td>
+    </tr>
+    {{end}}
+    </tbody>
+  </table></div>
+  {{else}}
+  <div class="empty">
+    {{if .Q}}
+    <h3>No Matching Merge Requests</h3>
+    <p>Nothing matches “{{.Q}}”. Search by part of the title, the project path or the author's username.</p>
+    <a class="btn" href="/merge-requests{{if ne .View "open"}}?view={{.View}}{{end}}">Clear Search</a>
+    {{else if eq .View "failing"}}
+    <h3>Nothing Is Failing</h3>
+    <p>Every open merge request repoguard has checked passes its checks.</p>
+    {{else if eq .View "closed"}}
+    <h3>No Merged or Closed Merge Requests</h3>
+    <p>Merge requests move here once they are merged or closed.</p>
+    {{else if .Watched}}
+    <h3>No Merge Requests Checked Yet</h3>
+    <p>repoguard checks a merge request when it is opened or gets new commits. For ones that are already open, run the checks from Projects.</p>
+    <a class="btn primary" href="/repos">Run Checks</a>
+    {{else}}
+    <h3>No Projects Checked Yet</h3>
+    <p>Choose the projects whose merge requests repoguard should check.</p>
+    <a class="btn primary" href="/repos">Choose Projects</a>
+    {{end}}
+  </div>
+  {{end}}
+</div>
+{{end}}

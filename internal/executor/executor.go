@@ -23,6 +23,7 @@ import (
 	"github.com/dpvinh30092005/repoguard/internal/metrics"
 	"github.com/dpvinh30092005/repoguard/internal/platform"
 	"github.com/dpvinh30092005/repoguard/internal/queue"
+	"github.com/dpvinh30092005/repoguard/internal/results"
 )
 
 const (
@@ -39,7 +40,8 @@ type Executor struct {
 	Allow    func(platform.Repo) bool
 	Log      *slog.Logger
 	Metrics  *metrics.Registry
-	Activity *activity.Log // optional: feeds the web UI
+	Activity *activity.Log  // optional: feeds the web UI
+	Results  *results.Store // optional: latest build per change request, for the web UI
 	// Env is passed into every build (e.g. SONAR_HOST_URL, SONAR_TOKEN). Keep it
 	// to low-privilege tokens: trusted authors' code runs with access to it.
 	Env map[string]string
@@ -89,10 +91,14 @@ func (x *Executor) Submit(repo platform.Repo, cr *platform.ChangeRequest) error 
 		return ErrNotAllowed
 	}
 	snapshot := *cr
-	return x.Queue.Enqueue(queue.Job{
+	err := x.Queue.Enqueue(queue.Job{
 		Key: fmt.Sprintf("exec|%s|%d|%s", repo, cr.Number, cr.HeadSHA),
 		Run: func(ctx context.Context) error { return x.Run(ctx, repo, &snapshot) },
 	})
+	if err == nil {
+		x.Results.RecordBuild(repo, cr, cr.URL, results.Build{State: "queued", Summary: "Waiting for a build slot"})
+	}
+	return err
 }
 
 // Run fetches, builds and reports one change request.
@@ -107,6 +113,9 @@ func (x *Executor) Run(ctx context.Context, repo platform.Repo, cr *platform.Cha
 			Event: "ci.build", Result: result, Detail: "commit " + short(cr.HeadSHA) + " · " + detail,
 			URL: c.WebURL(repo, platform.CR(cr.Number)),
 		})
+		if result == "skipped" || result == "error" {
+			x.Results.RecordBuild(repo, cr, cr.URL, results.Build{State: result, Summary: detail})
+		}
 	}
 	target := platform.CR(cr.Number)
 	log := x.Log.With("repo", repo.String(), "number", cr.Number, "sha", cr.HeadSHA)
@@ -129,6 +138,7 @@ func (x *Executor) Run(ctx context.Context, repo platform.Repo, cr *platform.Cha
 	if err := x.setStatus(ctx, c, repo, cr, platform.StatePending, "Building in sandbox…"); err != nil {
 		return err
 	}
+	x.Results.RecordBuild(repo, cr, cr.URL, results.Build{State: "running", Summary: "Building"})
 	src, err := c.GitSource(ctx, repo, cr)
 	if err != nil {
 		return err
@@ -143,11 +153,14 @@ func (x *Executor) Run(ctx context.Context, repo platform.Repo, cr *platform.Cha
 		x.count("sandbox_error")
 		record("error", err.Error())
 		_ = x.setStatus(ctx, c, repo, cr, platform.StateError, "Build backend error")
-		_ = c.UpsertComment(ctx, repo, target, Marker, fmt.Sprintf("%s\n### 🧪 repoguard ci\n⚠️ The build could not run: `%v`. A maintainer should check the repoguard logs.", Marker, err))
+		_ = c.UpsertComment(ctx, repo, target, Marker, fmt.Sprintf("%s\n#### repoguard · Build & Tests could not run\n\nThe build could not start: `%v`. A maintainer should check the repoguard logs.\n\n<sub>Commit `%s`</sub>\n", Marker, err, short(cr.HeadSHA)))
 		return err
 	}
 
-	state, summary, body := outcome(cr, res)
+	state, summary, body, report := outcome(cr, res)
+	x.Results.RecordBuild(repo, cr, cr.URL, results.Build{
+		State: string(state), Summary: summary, Backend: res.Backend, URL: res.URL, Report: report, Logs: logsUnlessReport(res, report),
+	})
 	x.count(string(state))
 	result := "passed"
 	if state != platform.StateSuccess {
@@ -221,25 +234,26 @@ func pinPolicy(dir string, policy []byte) error {
 	return os.WriteFile(path, policy, 0o644)
 }
 
-func outcome(cr *platform.ChangeRequest, res Result) (platform.State, string, string) {
-	where := "Run by the repoguard executor because this project's own pipelines are disabled."
+func outcome(cr *platform.ChangeRequest, res Result) (platform.State, string, string, *ci.Report) {
+	where := "Built in a sandbox by repoguard, because this project's own pipelines are disabled."
 	if res.URL != "" {
-		where = fmt.Sprintf("Built on [%s](%s) by the repoguard executor.", res.Backend, res.URL)
+		where = fmt.Sprintf("Built on [%s](%s) by repoguard.", res.Backend, res.URL)
 	}
-	header := fmt.Sprintf("%s\n### 🧪 repoguard ci · commit %s\n<sub>%s</sub>\n\n", Marker, short(cr.HeadSHA), where)
-	logs := func() string {
-		return "<details><summary>Build log (tail)</summary>\n\n```\n" + strings.TrimSpace(res.Logs) + "\n```\n</details>\n"
+	footer := fmt.Sprintf("\n<sub>Commit `%s` · %s</sub>\n", short(cr.HeadSHA), where)
+	failed := func(title, text string) string {
+		return fmt.Sprintf("%s\n#### repoguard · Build & Tests %s\n\n%s\n\n<details><summary>Build log (last lines)</summary>\n\n```\n%s\n```\n</details>\n%s",
+			Marker, title, text, strings.TrimSpace(res.Logs), footer)
 	}
 	if res.TimedOut {
-		return platform.StateFailure, "Timed out", header + "❌ The build exceeded the time limit and was stopped.\n\n" + logs()
+		return platform.StateFailure, "Timed out", failed("timed out", "The build ran past the time limit and was stopped."), nil
 	}
 	if res.Report == nil {
 		return platform.StateFailure, fmt.Sprintf("Build crashed (exit %d)", res.ExitCode),
-			header + fmt.Sprintf("❌ `repoguard ci` exited with code %d without producing a report.\n\n", res.ExitCode) + logs()
+			failed("crashed", fmt.Sprintf("`repoguard ci` exited with code %d without writing a report.", res.ExitCode)), nil
 	}
 	var report ci.Report
 	if err := json.Unmarshal(res.Report, &report); err != nil {
-		return platform.StateError, "Unreadable report", header + "⚠️ Could not parse the build report.\n\n" + logs()
+		return platform.StateError, "Unreadable report", failed("error", "The build report could not be read."), nil
 	}
 	var md strings.Builder
 	report.WriteMarkdown(&md)
@@ -247,13 +261,20 @@ func outcome(cr *platform.ChangeRequest, res Result) (platform.State, string, st
 	if report.Failed() {
 		state = platform.StateFailure
 	}
-	return state, report.Summary(), header + md.String()
+	return state, report.Summary(), Marker + "\n" + md.String() + footer, &report
+}
+
+func logsUnlessReport(res Result, report *ci.Report) string {
+	if report != nil {
+		return ""
+	}
+	return res.Logs
 }
 
 func skipped(cr *platform.ChangeRequest, why string) string {
-	return fmt.Sprintf("%s\n### 🧪 repoguard ci · commit %s\n⏸️ Not built automatically because %s. "+
-		"Running code from outside contributors on shared infrastructure is not allowed; a maintainer can push the branch to this repository to get it built.",
-		Marker, short(cr.HeadSHA), why)
+	return fmt.Sprintf("%s\n#### repoguard · Build & Tests not run\n\nNot built automatically, because %s. "+
+		"Code from outside contributors does not run on shared infrastructure; a maintainer can push the branch to this repository to have it built.\n\n<sub>Commit `%s`</sub>\n",
+		Marker, why, short(cr.HeadSHA))
 }
 
 // setStatus tolerates 403: with pipelines disabled GitLab may refuse commit

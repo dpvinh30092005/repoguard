@@ -137,7 +137,7 @@ func TestRunReportsPassAndPinsPolicy(t *testing.T) {
 	if c.statuses[0].State != platform.StatePending || last.State != platform.StateSuccess || last.Context != StatusContext {
 		t.Errorf("statuses = %+v", c.statuses)
 	}
-	if !strings.Contains(c.comment, "✅ passed") || !strings.Contains(c.comment, "commit abcdef1") {
+	if !strings.Contains(c.comment, "Build & Tests passed") || !strings.Contains(c.comment, "Commit `abcdef1`") {
 		t.Errorf("comment = %s", c.comment)
 	}
 }

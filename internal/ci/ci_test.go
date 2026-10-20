@@ -109,7 +109,7 @@ func TestRunStopsProjectAtFirstFailureAndReports(t *testing.T) {
 	if err := report.WriteJUnit(&junit); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"❌ failed", "| `services/billing` | go | ✅", "something odd", "osv-scanner not installed"} {
+	for _, want := range []string{"Build & Tests failed", "| `services/billing` | go | passed", "something odd", "osv-scanner not installed"} {
 		if !strings.Contains(md.String(), want) {
 			t.Errorf("markdown missing %q:\n%s", want, md.String())
 		}

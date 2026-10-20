@@ -1,0 +1,143 @@
+{{define "title"}}{{.R.Title}} · repoguard{{end}}
+{{define "head"}}
+{{$r := .R}}
+<div class="page-head">
+  <div>
+    <div class="crumbs"><a href="/merge-requests">Merge Requests</a> / {{$r.Repo}}</div>
+    <div class="review-head">
+      <h1>{{$r.Title}}</h1>
+      {{if .State.Text}}<span class="pill {{.State.Class}}">{{.State.Text}}</span>{{end}}
+      <span class="pill {{.Overall.Class}}">{{.Overall.Text}}</span>
+    </div>
+    <div class="meta-line">
+      <span>{{ref $r.Platform $r.Number}}</span>
+      <span>@{{$r.Author}}</span>
+      {{if $r.Branch}}<span><code>{{$r.Branch}}</code> into <code>{{$r.Target}}</code></span>{{end}}
+      <span>Commit <code>{{short $r.HeadSHA}}</code></span>
+      <span>Checked {{ago $r.CheckedAt}}</span>
+    </div>
+  </div>
+  <div class="actions">
+    {{if $r.URL}}<a class="btn" href="{{$r.URL}}" target="_blank" rel="noopener">Open in {{platformName $r.Platform}}</a>{{end}}
+  </div>
+</div>
+{{end}}
+{{define "content"}}
+{{$r := .R}}
+{{if $r.Warning}}<div class="note warning"><b>Project settings ignored.</b> {{md $r.Warning}}</div>{{end}}
+
+{{if .Failures}}
+<div class="note danger">
+  <b>{{len .Failures}} {{plural (len .Failures) "check needs" "checks need"}} attention before merging.</b>
+  <ul>{{range .Failures}}<li>{{md .}}</li>{{end}}</ul>
+</div>
+{{else if eq .Overall.Text "Passing"}}
+<div class="note success"><b>All checks passed</b> for commit <code>{{short $r.HeadSHA}}</code>.</div>
+{{else if eq .Overall.Text "Running…"}}
+<div class="note">Building commit <code>{{short $r.HeadSHA}}</code>… This page refreshes on its own.</div>
+{{end}}
+
+{{range .Checks}}
+<section class="card check-card">
+  <div class="card-head">
+    <div class="left"><h2>{{.Info.Label}}</h2><span class="pill {{.Pill.Class}}">{{.Pill.Text}}</span></div>
+    {{if .Ran}}<span class="sub">{{.Check.Summary}}</span>{{end}}
+  </div>
+  <div class="card-body">
+    <p class="about">{{.Info.About}}</p>
+    {{if not .Ran}}<p>{{.Note}}</p>{{end}}
+    {{if .Findings}}
+    <ul class="findings">
+      {{range .Findings}}
+      <li>
+        <span><span class="tag {{.TagClass}}">{{.Tag}}</span></span>
+        <div>{{md .Message}}{{if .Path}}<span class="loc">{{.Path}}{{if .Line}}:{{.Line}}{{end}}</span>{{end}}</div>
+      </li>
+      {{end}}
+    </ul>
+    {{else if and .Ran (eq .Check.State "success")}}
+    <p>No problems found.</p>
+    {{end}}
+    {{if .Failed}}<div class="fix"><b>How to fix:</b> {{.Info.Fix}}</div>{{end}}
+  </div>
+</section>
+{{end}}
+
+<section class="card check-card">
+  <div class="card-head">
+    <div class="left">
+      <h2>{{.CIInfo.Label}}</h2>
+      {{with .Build}}<span class="pill {{.Pill.Class}}">{{.Pill.Text}}</span>{{if .Outdated}}<span class="pill neutral plain">Older Commit</span>{{end}}
+      {{else}}<span class="pill neutral">{{if $.ExecutorOn}}No Build Yet{{else}}Off{{end}}</span>{{end}}
+    </div>
+    {{with .Build}}<span class="sub">{{.Build.Summary}}{{if .Build.URL}} · <a href="{{.Build.URL}}" target="_blank" rel="noopener">{{.Build.Backend}}</a>{{end}}</span>{{end}}
+  </div>
+  <div class="card-body">
+    <p class="about">{{.CIInfo.About}}</p>
+    {{with .Build}}
+      {{if .Outdated}}<div class="note">This build ran on commit <code>{{short .Build.SHA}}</code>. The latest commit is <code>{{short $r.HeadSHA}}</code>{{if $.ExecutorOn}}, and its build has not finished yet{{end}}.</div>{{end}}
+      {{if .Projects}}
+      <div class="sub-card table-wrap"><table class="stage-table">
+        <thead><tr><th>Project</th><th>Type</th>{{range .Stages}}<th>{{title .}}</th>{{end}}</tr></thead>
+        <tbody>
+        {{range .Projects}}
+        <tr>
+          <td><code>{{.Path}}</code></td><td class="secondary">{{.Type}}</td>
+          {{range .Cells}}<td class="nowrap">{{if .Class}}<span class="pill {{.Class}}">{{.Text}}</span> <span class="muted num">{{.Duration}}</span>{{else}}<span class="muted">–</span>{{end}}</td>{{end}}
+        </tr>
+        {{end}}
+        </tbody>
+      </table></div>
+      {{else if .Report}}
+      <p>No project was affected by this change.</p>
+      {{end}}
+
+      {{range $i, $f := .Failures}}
+      <details class="sub-card" {{if eq $i 0}}open{{end}}>
+        <summary>Failed: <code>{{$f.Project}}</code> · {{$f.Stage}} · <code>{{$f.Command}}</code></summary>
+        <pre>{{$f.Output}}</pre>
+      </details>
+      {{end}}
+
+      {{with .Report}}
+      <div class="sub-card">
+        {{if .SecretsRan}}
+        <div class="kv-row"><span class="k">Secrets in the Code</span><span class="v"><span class="pill {{$.Build.SecretPill.Class}}">{{$.Build.SecretPill.Text}}</span></span></div>
+        {{range .Secrets}}<div class="kv-row"><span class="k"><code>{{.Path}}:{{.Line}}</code></span><span class="v secondary">{{.Rule}} · <code>{{.Masked}}</code></span></div>{{end}}
+        {{end}}
+        {{if .APITests.Ran}}
+          {{range .APITests.Results}}
+          <div class="kv-row"><span class="k">API Tests · {{.Name}}</span><span class="v">
+            {{if .Error}}<span class="pill danger">Error</span> <span class="secondary">{{.Error}}</span>
+            {{else if .Failed}}<span class="pill danger">{{.Failed}} of {{.Assertions}} Failed</span>
+            {{else}}<span class="pill success">{{.Assertions}} Passed</span>{{end}}</span></div>
+          {{range .Failures}}<div class="kv-row"><span class="k secondary">{{.Request}} › {{.Test}}</span><span class="v secondary">{{.Message}}</span></div>{{end}}
+          {{end}}
+        {{else if .APITests.Note}}
+        <div class="kv-row"><span class="k">API Tests (Postman)</span><span class="v secondary">Not run: {{.APITests.Note}}</span></div>
+        {{end}}
+        {{if .Sonar.Ran}}
+        <div class="kv-row"><span class="k">SonarQube</span><span class="v">
+          {{if .Sonar.Error}}<span class="pill danger">Error</span> <span class="secondary">{{.Sonar.Error}}</span>
+          {{else}}<span class="pill {{$.Build.SonarPill.Class}}">{{$.Build.SonarPill.Text}}</span>{{if .Sonar.URL}} <a href="{{.Sonar.URL}}" target="_blank" rel="noopener">Open Dashboard</a>{{end}}{{end}}</span></div>
+        {{if $.Build.Sonar}}<div class="kv-row"><span class="k">Measures</span><span class="v inline-list secondary">{{range $.Build.Sonar}}<span>{{.Label}} <b class="num">{{.Value}}</b></span>{{end}}</span></div>{{end}}
+        {{range .Sonar.Conditions}}{{if eq .Status "ERROR"}}<div class="kv-row"><span class="k secondary"><code>{{.Metric}}</code></span><span class="v secondary">{{.Actual}} (limit {{.Comparator}} {{.Threshold}})</span></div>{{end}}{{end}}
+        {{end}}
+        <div class="kv-row"><span class="k">Known Vulnerabilities</span><span class="v"><span class="pill {{$.Build.VulnsPill.Class}}">{{$.Build.VulnsPill.Text}}</span></span></div>
+      </div>
+      {{end}}
+
+      {{if .Build.Logs}}
+      <details class="sub-card" open><summary>Build Log (Last Lines)</summary><pre>{{.Build.Logs}}</pre></details>
+      {{end}}
+      {{if or (eq .Build.State "failure") (eq .Build.State "error")}}{{if not .Outdated}}<div class="fix"><b>How to fix:</b> {{$.CIInfo.Fix}}</div>{{end}}{{end}}
+    {{else}}
+      {{if .ExecutorOn}}
+      <p>No build has run for this merge request yet. The next commit pushed to it starts one.</p>
+      {{else}}
+      <p>Builds are off for this project, so its own CI pipeline is expected to build and test it. If the project's pipelines are disabled, turn builds on in <a href="/repos">Projects</a>.</p>
+      {{end}}
+    {{end}}
+  </div>
+</section>
+{{end}}

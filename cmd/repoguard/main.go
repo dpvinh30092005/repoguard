@@ -33,6 +33,7 @@ import (
 	"github.com/dpvinh30092005/repoguard/internal/platform"
 	"github.com/dpvinh30092005/repoguard/internal/poller"
 	"github.com/dpvinh30092005/repoguard/internal/queue"
+	"github.com/dpvinh30092005/repoguard/internal/results"
 	"github.com/dpvinh30092005/repoguard/internal/server"
 	"github.com/dpvinh30092005/repoguard/internal/store"
 	"github.com/dpvinh30092005/repoguard/internal/web"
@@ -99,7 +100,13 @@ func setup(log *slog.Logger, m *metrics.Registry, act *activity.Log) (*app, *eng
 	}
 	cks := []checks.Check{prrules.Check{}, secrets.Check{}, aireview.Check{Reviewer: a.reviewer}}
 	eng := engine.New(nil, cks, log, m)
-	eng.Clients, eng.Activity, eng.PublicURL = a.reg, act, cfg.PublicURL
+	eng.Clients, eng.Activity, eng.PublicURL = a.reg, act, a.publicURL
+	res, err := results.Open(filepath.Join(dataDir, "results.json"))
+	if err != nil {
+		log.Warn("results history unreadable, starting empty", "err", err)
+		res, _ = results.Open("")
+	}
+	a.results, eng.Results = res, res
 	return a, eng, nil
 }
 
@@ -119,7 +126,7 @@ func serve(ctx context.Context) error {
 	if !cfg.Executor.Disabled() {
 		xq = queue.New(queue.Options{Workers: cfg.Executor.Concurrency, Size: 200, MaxRetries: 1, JobTimeout: cfg.Executor.Timeout + 10*time.Minute, Logger: log, Metrics: m})
 		xq.Start(ctx)
-		a.exec = &executor.Executor{Clients: a.reg, Queue: xq, Allow: a.allow, Log: log, Metrics: m, Activity: act}
+		a.exec = &executor.Executor{Clients: a.reg, Queue: xq, Allow: a.allow, Log: log, Metrics: m, Activity: act, Results: a.results}
 		eng.Executor = a.exec
 	}
 
@@ -132,10 +139,13 @@ func serve(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("REPOGUARD_POLL_INTERVAL: %w", err)
 	}
-	p := &poller.Poller{Clients: a.reg, Repos: func() []platform.Repo { return a.watchedRepos("poll") }, Enqueue: enqueue, Interval: interval, Log: log}
+	p := &poller.Poller{
+		Clients: a.reg, Repos: func() []platform.Repo { return a.watchedRepos("poll") }, Enqueue: enqueue, Interval: interval, Log: log,
+		Gone: a.results.SetState,
+	}
 
 	ui := &web.UI{
-		Store: a.store, Clients: a.reg, Activity: act, Poller: p, Log: log, Version: version,
+		Store: a.store, Clients: a.reg, Activity: act, Results: a.results, Poller: p, Log: log, Version: version,
 		Password: a.password, Apply: a.apply, Secret: a.secret, PublicURL: a.publicURL,
 		QueueDepth: q.Depth, AIEnabled: a.reviewer.Available, Locked: a.locked(), Executor: a.executorInfo,
 	}

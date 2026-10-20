@@ -19,9 +19,11 @@ const (
 )
 
 type Poller struct {
-	Clients  *platform.Registry
-	Repos    func() []platform.Repo // repositories in polling mode
-	Enqueue  func(platform.Event)
+	Clients *platform.Registry
+	Repos   func() []platform.Repo // repositories in polling mode
+	Enqueue func(platform.Event)
+	// Gone, when set, hears about change requests that left the open list (merged or closed).
+	Gone     func(repo platform.Repo, number int, state string)
 	Interval time.Duration
 	Log      *slog.Logger
 
@@ -133,9 +135,16 @@ func (p *Poller) pollRepo(ctx context.Context, c platform.Client, repo platform.
 			continue
 		}
 		delete(st.crs, n)
-		// Gone from the open list: merged or closed. Only merges matter.
-		if cr, err := c.GetChangeRequest(ctx, repo, n); err == nil && cr.State == "merged" {
+		// Gone from the open list: merged or closed. Only merges trigger work.
+		cr, err := c.GetChangeRequest(ctx, repo, n)
+		if err != nil {
+			continue
+		}
+		if cr.State == "merged" {
 			emit(platform.EventCRMerged, n, cr.HeadSHA, false)
+		}
+		if p.Gone != nil && cr.State != "open" {
+			p.Gone(repo, n, cr.State)
 		}
 	}
 

@@ -7,29 +7,29 @@ import (
 	"strings"
 )
 
-var stageIcon = map[string]string{"passed": "✅", "failed": "❌", "skipped": "⏭️"}
+var stageWord = map[string]string{"passed": "passed", "failed": "**failed**", "skipped": "skipped"}
 
-// WriteMarkdown renders the report for a job summary / MR artifact.
+// WriteMarkdown renders the report for a job summary or a merge request comment.
 func (r Report) WriteMarkdown(w io.Writer) {
-	verdict := "✅ passed"
+	verdict := "passed"
 	if r.Failed() {
-		verdict = "❌ failed"
+		verdict = "failed"
 	}
-	fmt.Fprintf(w, "## 🛡️ repoguard ci — %s\n\n", verdict)
+	fmt.Fprintf(w, "#### repoguard · Build & Tests %s\n\n", verdict)
 
 	if len(r.Projects) == 0 {
-		fmt.Fprintln(w, "_No affected projects._")
+		fmt.Fprintln(w, "No project was affected by this change.")
 	} else {
-		fmt.Fprintf(w, "| Project | Type | %s |\n|---|---|%s\n", strings.Join(Stages, " | "), strings.Repeat("---|", len(Stages)))
+		fmt.Fprintf(w, "| Project | Type | %s |\n| :-- | :-- |%s\n", strings.Join(Stages, " | "), strings.Repeat(" :-- |", len(Stages)))
 		for _, p := range r.Projects {
 			cells := make([]string, len(Stages))
 			for i, name := range Stages {
 				cells[i] = "–"
 				for _, s := range p.Stages {
 					if s.Stage == name {
-						cells[i] = stageIcon[s.Status]
+						cells[i] = stageWord[s.Status]
 						if s.Status != "skipped" {
-							cells[i] += fmt.Sprintf(" %.1fs", s.Duration.Seconds())
+							cells[i] += fmt.Sprintf(" · %.1fs", s.Duration.Seconds())
 						}
 					}
 				}
@@ -41,7 +41,7 @@ func (r Report) WriteMarkdown(w io.Writer) {
 	for _, p := range r.Projects {
 		for _, s := range p.Stages {
 			if s.Status == "failed" {
-				fmt.Fprintf(w, "\n<details><summary>❌ <code>%s</code> · %s — <code>%s</code></summary>\n\n```\n%s\n```\n</details>\n",
+				fmt.Fprintf(w, "\n<details><summary>Failed: <code>%s</code> · %s · <code>%s</code></summary>\n\n```\n%s\n```\n</details>\n",
 					p.Project.Path, s.Stage, s.Command, strings.TrimSpace(s.Output))
 			}
 		}
@@ -50,9 +50,9 @@ func (r Report) WriteMarkdown(w io.Writer) {
 	switch {
 	case !r.SecretsRan:
 	case len(r.Secrets) == 0:
-		fmt.Fprintln(w, "\n**Secrets:** ✅ none found")
+		fmt.Fprintln(w, "\n**Secrets:** none found")
 	default:
-		fmt.Fprintf(w, "\n**Secrets:** ❌ %d possible secret(s) — remove and rotate them:\n", len(r.Secrets))
+		fmt.Fprintf(w, "\n**Secrets:** %d possible secret(s). Remove them from the code and rotate them:\n", len(r.Secrets))
 		for _, s := range r.Secrets {
 			fmt.Fprintf(w, "- `%s:%d` %s (`%s`)\n", s.Path, s.Line, s.Rule, s.Masked)
 		}
@@ -62,16 +62,14 @@ func (r Report) WriteMarkdown(w io.Writer) {
 	r.writeSonar(w)
 
 	switch {
+	case !r.Vulns.Ran && r.Vulns.Note == "":
+		fmt.Fprintln(w, "\n**Dependencies:** not scanned")
 	case !r.Vulns.Ran:
-		fmt.Fprintf(w, "\n**Dependencies:** ⏭️ %s\n", r.Vulns.Note)
+		fmt.Fprintf(w, "\n**Dependencies:** not scanned: %s\n", r.Vulns.Note)
 	case r.Vulns.Count == 0:
-		fmt.Fprintf(w, "\n**Dependencies:** ✅ no known vulnerabilities %s\n", r.Vulns.Note)
+		fmt.Fprintf(w, "\n**Dependencies:** no known vulnerabilities %s\n", r.Vulns.Note)
 	default:
-		icon := "⚠️"
-		if r.FailOnVulns {
-			icon = "❌"
-		}
-		fmt.Fprintf(w, "\n**Dependencies:** %s %d known vulnerabilit(ies) — see `osv-scanner` output in the job log\n", icon, r.Vulns.Count)
+		fmt.Fprintf(w, "\n**Dependencies:** %d known vulnerabilit(ies). Details are in the `osv-scanner` output of the build log.\n", r.Vulns.Count)
 	}
 }
 
@@ -79,26 +77,26 @@ func (r Report) writeAPITests(w io.Writer) {
 	a := r.APITests
 	switch {
 	case !a.Ran && a.Note != "":
-		fmt.Fprintf(w, "\n**API tests (Postman):** ⏭️ %s\n", a.Note)
+		fmt.Fprintf(w, "\n**API tests (Postman):** not run: %s\n", a.Note)
 		return
 	case !a.Ran:
 		return
 	}
-	icon := "✅"
+	verdict := "passed"
 	if a.Failed() {
-		icon = "❌"
+		verdict = "**failed**"
 	}
-	fmt.Fprintf(w, "\n**API tests (Postman):** %s\n\n| Collection | Requests | Assertions | Failed |\n|---|---|---|---|\n", icon)
+	fmt.Fprintf(w, "\n**API tests (Postman):** %s\n\n| Collection | Requests | Assertions | Failed |\n| :-- | --: | --: | --: |\n", verdict)
 	for _, res := range a.Results {
 		if res.Error != "" {
-			fmt.Fprintf(w, "| %s | – | – | ⚠️ %s |\n", res.Name, res.Error)
+			fmt.Fprintf(w, "| %s | – | – | error: %s |\n", res.Name, res.Error)
 			continue
 		}
 		fmt.Fprintf(w, "| %s | %d | %d | %d |\n", res.Name, res.Requests, res.Assertions, res.Failed)
 	}
 	for _, res := range a.Results {
 		for _, f := range res.Failures {
-			fmt.Fprintf(w, "- ❌ **%s** › %s: %s\n", f.Request, f.Test, f.Message)
+			fmt.Fprintf(w, "- **%s** › %s: %s\n", f.Request, f.Test, f.Message)
 		}
 	}
 }
@@ -108,21 +106,29 @@ var sonarLabels = map[string]string{
 	"code_smells": "Code smells", "coverage": "Coverage %", "duplicated_lines_density": "Duplication %",
 }
 
+// SonarLabel names a SonarQube metric for people.
+func SonarLabel(metric string) string {
+	if l, ok := sonarLabels[metric]; ok {
+		return l
+	}
+	return metric
+}
+
 func (r Report) writeSonar(w io.Writer) {
 	s := r.Sonar
 	switch {
 	case !s.Ran && s.Note != "":
-		fmt.Fprintf(w, "\n**SonarQube:** ⏭️ %s\n", s.Note)
+		fmt.Fprintf(w, "\n**SonarQube:** not run: %s\n", s.Note)
 		return
 	case !s.Ran:
 		return
 	case s.Error != "":
-		fmt.Fprintf(w, "\n**SonarQube:** ⚠️ %s\n", s.Error)
+		fmt.Fprintf(w, "\n**SonarQube:** error: %s\n", s.Error)
 		return
 	}
-	verdict := map[string]string{"OK": "✅ Quality Gate passed", "ERROR": "❌ Quality Gate failed", "WARN": "⚠️ Quality Gate warning"}[s.Gate]
+	verdict := map[string]string{"OK": "Quality Gate passed", "ERROR": "**Quality Gate failed**", "WARN": "Quality Gate warning"}[s.Gate]
 	if verdict == "" {
-		verdict = "ℹ️ no Quality Gate (" + s.Gate + ")"
+		verdict = "no Quality Gate (" + s.Gate + ")"
 	}
 	fmt.Fprintf(w, "\n**SonarQube:** %s · [%s](%s)\n", verdict, s.ProjectKey, s.URL)
 	var parts []string
@@ -136,7 +142,7 @@ func (r Report) writeSonar(w io.Writer) {
 	}
 	for _, c := range s.Conditions {
 		if c.Status == "ERROR" {
-			fmt.Fprintf(w, "- ❌ `%s` = %s (limit %s %s)\n", c.Metric, c.Actual, c.Comparator, c.Threshold)
+			fmt.Fprintf(w, "- `%s` = %s (limit %s %s)\n", c.Metric, c.Actual, c.Comparator, c.Threshold)
 		}
 	}
 }

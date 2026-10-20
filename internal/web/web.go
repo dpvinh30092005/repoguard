@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"html/template"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -22,13 +23,20 @@ import (
 	"time"
 
 	"github.com/dpvinh30092005/repoguard/internal/activity"
+	"github.com/dpvinh30092005/repoguard/internal/checks"
 	"github.com/dpvinh30092005/repoguard/internal/platform"
 	"github.com/dpvinh30092005/repoguard/internal/poller"
+	"github.com/dpvinh30092005/repoguard/internal/results"
 	"github.com/dpvinh30092005/repoguard/internal/store"
 )
 
 //go:embed templates/*.html
 var templateFS embed.FS
+
+// static holds the stylesheet and the Geist fonts (SIL Open Font License, see static/fonts/OFL.txt).
+//
+//go:embed static
+var staticFS embed.FS
 
 const cookieName = "repoguard_session"
 
@@ -54,6 +62,7 @@ type UI struct {
 	Store    *store.Store
 	Clients  *platform.Registry
 	Activity *activity.Log
+	Results  *results.Store
 	Poller   *poller.Poller
 	Log      *slog.Logger
 	Version  string
@@ -83,16 +92,28 @@ func (u *UI) Init(ctx context.Context) error {
 			}
 			return ev
 		},
-		"lower": strings.ToLower,
+		"md":           md,
+		"short":        shortSHA,
+		"platformName": platformName,
+		"ref":          ref,
+		"checkPill":    checkPill,
+		"label":        checks.Label,
+		"activityPill": activityPill,
 		"title": func(s string) string {
 			if s == "" {
 				return s
 			}
 			return strings.ToUpper(s[:1]) + s[1:]
 		},
+		"plural": func(n int, one, many string) string {
+			if n == 1 {
+				return one
+			}
+			return many
+		},
 	}
 	u.tpl = map[string]*template.Template{}
-	for _, page := range []string{"overview", "connect", "repos", "guide", "login"} {
+	for _, page := range []string{"overview", "reviews", "review", "connect", "repos", "guide", "login", "notfound"} {
 		t, err := template.New("layout.html").Funcs(funcs).ParseFS(templateFS, "templates/layout.html", "templates/"+page+".html")
 		if err != nil {
 			return fmt.Errorf("template %s: %w", page, err)
@@ -112,10 +133,14 @@ func (u *UI) refresh(ctx context.Context) {
 
 func (u *UI) Routes() http.Handler {
 	mux := http.NewServeMux()
+	assets, _ := fs.Sub(staticFS, "static")
+	mux.Handle("GET /assets/", cacheFor(time.Hour, http.StripPrefix("/assets/", http.FileServerFS(assets))))
 	mux.HandleFunc("GET /login", u.loginPage)
 	mux.HandleFunc("POST /login", u.login)
 	mux.HandleFunc("POST /logout", u.logout)
 	mux.Handle("GET /{$}", u.auth(u.overview))
+	mux.Handle("GET /merge-requests", u.auth(u.reviewsPage))
+	mux.Handle("GET /merge-requests/{id}", u.auth(u.reviewPage))
 	mux.Handle("GET /connect", u.auth(u.connectPage))
 	mux.Handle("POST /connect", u.auth(u.saveConnect))
 	mux.Handle("GET /repos", u.auth(u.reposPage))
@@ -183,7 +208,7 @@ func (u *UI) loginPage(w http.ResponseWriter, r *http.Request) {
 func (u *UI) login(w http.ResponseWriter, r *http.Request) {
 	if subtle.ConstantTimeCompare([]byte(r.FormValue("password")), []byte(u.Password())) != 1 {
 		time.Sleep(500 * time.Millisecond) // slow down guessing
-		u.render(w, r, "login", map[string]any{"Error": "Wrong password."})
+		u.render(w, r, "login", map[string]any{"Error": "Wrong password. Find it on the admin password line of the startup log."})
 		return
 	}
 	expiry := time.Now().Add(7 * 24 * time.Hour).Unix()
@@ -223,9 +248,23 @@ func (u *UI) overview(w http.ResponseWriter, r *http.Request) {
 			executorRepos++
 		}
 	}
+	all := u.Results.List()
+	var attention []results.Review
+	for _, rv := range all {
+		if rv.State == "open" && rv.Status() == results.Failing {
+			attention = append(attention, rv)
+		}
+	}
+	more := 0
+	if len(attention) > 8 {
+		more, attention = len(attention)-8, attention[:8]
+	}
+	activity := u.Activity.List()
+	if len(activity) > 12 {
+		activity = activity[:12]
+	}
 	connected := st[platform.GitLab].User != "" || st[platform.GitHub].User != ""
 	u.render(w, r, "overview", map[string]any{
-		"Status":        st,
 		"GitLab":        st[platform.GitLab],
 		"GitHub":        st[platform.GitHub],
 		"AI":            u.AIEnabled(),
@@ -234,7 +273,12 @@ func (u *UI) overview(w http.ResponseWriter, r *http.Request) {
 		"ExecutorRepos": executorRepos,
 		"Ex":            ex,
 		"Queue":         u.QueueDepth(),
-		"Activity":      u.Activity.List(),
+		"Activity":      activity,
+		"Counts":        countReviews(all),
+		"Attention":     rows(attention),
+		"More":          more,
+		"Checked":       len(all) > 0 && connected && len(repos) > 0,
+		"PublicURL":     u.PublicURL(),
 		"Refresh":       true,
 	})
 }
@@ -303,7 +347,7 @@ func (u *UI) saveConnect(w http.ResponseWriter, r *http.Request) {
 		}
 	})
 	if err != nil {
-		redirect(w, r, "/connect", "", "Could not save: "+err.Error())
+		redirect(w, r, "/connect", "", "Settings not saved: "+err.Error()+". Check that the data folder is writable and try again.")
 		return
 	}
 	u.refresh(r.Context())
@@ -313,20 +357,29 @@ func (u *UI) saveConnect(w http.ResponseWriter, r *http.Request) {
 		kind := platform.Kind(r.FormValue("section"))
 		switch s := st[kind]; {
 		case s.User != "":
-			redirect(w, r, "/repos", fmt.Sprintf("Connected to %s as @%s. Now pick the projects to check.", title(kind), s.User), "")
+			redirect(w, r, "/repos", fmt.Sprintf("Connected to %s as @%s", title(kind), s.User), "")
 		case s.Err != "":
-			redirect(w, r, "/connect", "", fmt.Sprintf("Could not connect to %s: %s", title(kind), s.Err))
+			redirect(w, r, "/connect", "", fmt.Sprintf("Could not connect to %s: %s. Check the address and that the token has the api scope.", title(kind), s.Err))
 		default:
-			redirect(w, r, "/connect", "Connection removed.", "")
+			redirect(w, r, "/connect", title(kind)+" disconnected", "")
 		}
 	default:
-		redirect(w, r, "/connect", "Saved.", "")
+		redirect(w, r, "/connect", savedToast[r.FormValue("section")], "")
 	}
+}
+
+var savedToast = map[string]string{
+	"ai":       "AI review settings saved",
+	"build":    "Build settings saved",
+	"sonar":    "SonarQube settings saved",
+	"advanced": "Public address saved",
 }
 
 type repoRow struct {
 	Repo    platform.Repo
 	Watched *store.Repo
+	Open    int // open change requests repoguard has checked
+	Failing int
 }
 
 type platformRepos struct {
@@ -339,6 +392,20 @@ type platformRepos struct {
 func (u *UI) reposPage(w http.ResponseWriter, r *http.Request) {
 	q := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
 	watched := u.Store.Get().Repos
+	type stat struct{ open, failing int }
+	stats := map[string]stat{}
+	for _, rv := range u.Results.List() {
+		if rv.State != "open" {
+			continue
+		}
+		k := store.Key(rv.Platform, rv.Repo)
+		s := stats[k]
+		s.open++
+		if rv.Status() == results.Failing {
+			s.failing++
+		}
+		stats[k] = s
+	}
 	var groups []platformRepos
 	for _, c := range u.Clients.All() {
 		g := platformRepos{Kind: c.Kind()}
@@ -353,8 +420,9 @@ func (u *UI) reposPage(w http.ResponseWriter, r *http.Request) {
 			if q != "" && !strings.Contains(strings.ToLower(rp.FullName), q) {
 				continue
 			}
-			row := repoRow{Repo: rp}
-			if wr, ok := watched[store.Key(string(rp.Platform), rp.FullName)]; ok {
+			key := store.Key(string(rp.Platform), rp.FullName)
+			row := repoRow{Repo: rp, Open: stats[key].open, Failing: stats[key].failing}
+			if wr, ok := watched[key]; ok {
 				row.Watched = &wr
 			}
 			g.Rows = append(g.Rows, row)
@@ -373,6 +441,7 @@ func (u *UI) reposPage(w http.ResponseWriter, r *http.Request) {
 		"Q":         r.URL.Query().Get("q"),
 		"PublicURL": u.PublicURL(),
 		"Ex":        u.Executor(r.Context()),
+		"Watched":   len(watched),
 	})
 }
 
@@ -391,21 +460,21 @@ func (u *UI) watch(w http.ResponseWriter, r *http.Request) {
 	repo := repoFromForm(r)
 	c, ok := u.Clients.Get(repo.Platform)
 	if !ok || repo.FullName == "" {
-		redirect(w, r, "/repos", "", "Invalid project.")
+		redirect(w, r, "/repos", "", "Project not found. Reload the page and try again.")
 		return
 	}
 	rec := store.Repo{
 		Platform: string(repo.Platform), ID: repo.ID, FullName: repo.FullName,
 		DefaultBranch: repo.DefaultBranch, InstallationID: repo.InstallationID, Mode: "poll",
 	}
-	msg := fmt.Sprintf("Now watching %s (repoguard polls %s every 30 seconds). Open or push to a merge request to try it.", repo.FullName, title(repo.Platform))
+	msg := fmt.Sprintf("Checking %s every 30 seconds", repo.FullName)
 	if pub := u.PublicURL(); pub != "" {
 		id, err := c.CreateWebhook(r.Context(), repo, pub+"/webhooks/"+string(repo.Platform), u.Secret(repo.Platform))
 		if err == nil {
 			rec.Mode, rec.HookID = "webhook", id
-			msg = fmt.Sprintf("Webhook created for %s. New merge requests are checked immediately.", repo.FullName)
+			msg = fmt.Sprintf("Webhook created for %s", repo.FullName)
 		} else {
-			msg = fmt.Sprintf("Could not create a webhook (%v), so repoguard falls back to polling. %s", err, msg)
+			msg = fmt.Sprintf("%s: webhook not created (%v), checking every 30 seconds instead", repo.FullName, err)
 		}
 	}
 	if err := u.Store.Update(func(s *store.Settings) { s.Repos[rec.Key()] = rec }); err != nil {
@@ -420,7 +489,7 @@ func (u *UI) unwatch(w http.ResponseWriter, r *http.Request) {
 	key := store.Key(string(repo.Platform), repo.FullName)
 	rec, ok := u.Store.Get().Repos[key]
 	if !ok {
-		redirect(w, r, "/repos", "", "This project is not being watched.")
+		redirect(w, r, "/repos", "", "This project is not being checked.")
 		return
 	}
 	if rec.HookID != "" {
@@ -434,7 +503,7 @@ func (u *UI) unwatch(w http.ResponseWriter, r *http.Request) {
 		redirect(w, r, "/repos", "", err.Error())
 		return
 	}
-	redirect(w, r, "/repos", "Stopped checking "+repo.FullName+".", "")
+	redirect(w, r, "/repos", "Stopped checking "+repo.FullName, "")
 }
 
 func (u *UI) toggleExecutor(w http.ResponseWriter, r *http.Request) {
@@ -454,9 +523,9 @@ func (u *UI) toggleExecutor(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		redirect(w, r, "/repos", "", err.Error())
 	case on:
-		redirect(w, r, "/repos", "CI builds turned on for "+repo.FullName+". Every new commit in a merge request will be built and tested.", "")
+		redirect(w, r, "/repos", "Builds turned on for "+repo.FullName, "")
 	default:
-		redirect(w, r, "/repos", "CI builds turned off for "+repo.FullName+".", "")
+		redirect(w, r, "/repos", "Builds turned off for "+repo.FullName, "")
 	}
 }
 
@@ -465,16 +534,18 @@ func (u *UI) checkNow(w http.ResponseWriter, r *http.Request) {
 	n, err := u.Poller.CheckNow(r.Context(), repo)
 	switch {
 	case err != nil:
-		redirect(w, r, "/repos", "", "Could not list merge requests: "+err.Error())
+		redirect(w, r, "/repos", "", "Could not list merge requests: "+err.Error()+". Check the connection in Settings.")
 	case n == 0:
-		redirect(w, r, "/repos", repo.FullName+" has no open merge requests.", "")
+		redirect(w, r, "/repos", "No open merge requests in "+repo.FullName, "")
+	case n == 1:
+		redirect(w, r, "/merge-requests", "Checking 1 merge request of "+repo.FullName, "")
 	default:
-		redirect(w, r, "/", fmt.Sprintf("Queued %d merge request(s) of %s for checking. Results appear below and on each merge request.", n, repo.FullName), "")
+		redirect(w, r, "/merge-requests", fmt.Sprintf("Checking %d merge requests of %s", n, repo.FullName), "")
 	}
 }
 
 func (u *UI) guide(w http.ResponseWriter, r *http.Request) {
-	u.render(w, r, "guide", map[string]any{"PublicURL": u.PublicURL()})
+	u.render(w, r, "guide", map[string]any{"PublicURL": u.PublicURL(), "Catalog": checks.Catalog()})
 }
 
 // ---------------------------------------------------------------------------
@@ -482,11 +553,18 @@ func (u *UI) guide(w http.ResponseWriter, r *http.Request) {
 func (u *UI) render(w http.ResponseWriter, r *http.Request, page string, data map[string]any) {
 	data["Page"] = page
 	data["Version"] = u.Version
+	if page != "login" {
+		st := u.statuses()
+		data["Shell"] = shell{
+			GitLab: st[platform.GitLab], GitHub: st[platform.GitHub],
+			Failing: countReviews(u.Results.List()).Failing,
+		}
+	}
 	data["OK"] = r.URL.Query().Get("ok")
 	data["Err"] = r.URL.Query().Get("err")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("X-Frame-Options", "DENY")
-	w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'unsafe-inline'")
+	w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self'; script-src 'unsafe-inline'; img-src 'self' data:")
 	if err := u.tpl[page].ExecuteTemplate(w, "layout.html", data); err != nil {
 		u.Log.Error("ui: render", "page", page, "err", err)
 	}
@@ -514,24 +592,39 @@ func title(k platform.Kind) string {
 }
 
 var eventLabels = map[string]string{
-	"change_request.opened":  "New MR / new commits",
-	"change_request.updated": "MR edited",
-	"change_request.merged":  "MR merged",
-	"issue.opened":           "New issue",
-	"issue.edited":           "Issue edited",
+	"change_request.opened":  "Checked new commits",
+	"change_request.updated": "Re-checked after an edit",
+	"change_request.merged":  "Merged",
+	"issue.opened":           "Triaged a new issue",
+	"issue.edited":           "Re-triaged an edited issue",
 	"issue.activity":         "New comment",
-	"ci.build":               "CI build",
+	"ci.build":               "Built and tested",
 }
 
-func ago(t time.Time) string {
-	d := time.Since(t)
-	switch {
-	case d < time.Minute:
-		return "just now"
-	case d < time.Hour:
-		return fmt.Sprintf("%d min ago", int(d.Minutes()))
-	case d < 24*time.Hour:
-		return fmt.Sprintf("%d h ago", int(d.Hours()))
+// shell is what the sidebar shows on every page.
+type shell struct {
+	GitLab, GitHub Status
+	Failing        int
+}
+
+func cacheFor(d time.Duration, h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", fmt.Sprintf("public, max-age=%d", int(d.Seconds())))
+		h.ServeHTTP(w, r)
+	})
+}
+
+// activityPill labels an activity entry's result.
+func activityPill(result string) pill {
+	switch result {
+	case "ok":
+		return pill{"neutral", "Done"}
+	case "passed":
+		return pill{"success", "Passed"}
+	case "failed":
+		return pill{"danger", "Failed"}
+	case "skipped":
+		return pill{"neutral", "Skipped"}
 	}
-	return t.Format("Jan 2 15:04")
+	return pill{"danger", "Error"}
 }

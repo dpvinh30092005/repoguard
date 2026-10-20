@@ -134,7 +134,7 @@ func TestJenkinsBuildFailureWithoutReport(t *testing.T) {
 	if err != nil || res.ExitCode != 1 || res.Report != nil {
 		t.Fatalf("res=%+v err=%v", res, err)
 	}
-	state, summary, body := outcome(remoteReq.CR, res)
+	state, summary, body, _ := outcome(remoteReq.CR, res)
 	if state != platform.StateFailure || !strings.Contains(summary, "crashed") || !strings.Contains(body, "Built on [Jenkins #12]") {
 		t.Fatalf("outcome: %s %s\n%s", state, summary, body)
 	}
@@ -176,7 +176,7 @@ func TestExecutorUsesRemoteBackend(t *testing.T) {
 	if f.params["REPO_URL"] != "https://gitlab.example/grp/app.git" || strings.Contains(f.params["REPO_URL"], "glpat") {
 		t.Errorf("clone URL sent to Jenkins = %q (must carry no credentials)", f.params["REPO_URL"])
 	}
-	if !strings.Contains(c.comment, "Built on [Jenkins #12]") || !strings.Contains(c.comment, "✅ passed") {
+	if !strings.Contains(c.comment, "Built on [Jenkins #12]") || !strings.Contains(c.comment, "Build & Tests passed") {
 		t.Errorf("comment = %s", c.comment)
 	}
 }

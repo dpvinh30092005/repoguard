@@ -192,7 +192,7 @@ func TestPullRequestFlow(t *testing.T) {
 	}
 
 	summary := c.comments["change_request#7|"+markerSummary]
-	for _, want := range []string{"| `secrets` | ❌ failure", "One risky change.", "Commit abc1234"} {
+	for _, want := range []string{"| Secrets | **Failed** |", "One risky change.", "Commit `abc1234`"} {
 		if !strings.Contains(summary, want) {
 			t.Errorf("summary missing %q:\n%s", want, summary)
 		}
@@ -230,7 +230,7 @@ func TestPullRequestFlow(t *testing.T) {
 	if c.statuses["repoguard/pr-rules"].State != platform.StateFailure {
 		t.Error("pr-rules should fail after bad title edit")
 	}
-	if !strings.Contains(c.comments["change_request#7|"+markerSummary], "⏭️ skipped") {
+	if !strings.Contains(c.comments["change_request#7|"+markerSummary], "| AI Review | Not run |") {
 		t.Error("summary should show the skipped AI review")
 	}
 }
@@ -306,7 +306,7 @@ func TestIssueTriage(t *testing.T) {
 	if err := e.Handle(context.Background(), platform.Event{Type: platform.EventIssueEdited, Repo: testRepo, Number: 2}); err != nil {
 		t.Fatal(err)
 	}
-	if c.issues[2].HasLabel("needs-info") || !strings.Contains(c.comments["issue#2|"+markerNeedsInfo], "✅") {
+	if c.issues[2].HasLabel("needs-info") || !strings.Contains(c.comments["issue#2|"+markerNeedsInfo], "everything needed") {
 		t.Errorf("after edit: labels=%v comment=%q", c.issues[2].Labels, c.comments["issue#2|"+markerNeedsInfo])
 	}
 }
@@ -329,7 +329,7 @@ func TestSweepStaleAndSLA(t *testing.T) {
 	if c.closed[2] != platform.ClosedNotPlanned {
 		t.Error("stale issue without reaction should close as not planned")
 	}
-	if !strings.Contains(c.comments["issue#3|"+markerSLA], "without an assignee") {
+	if !strings.Contains(c.comments["issue#3|"+markerSLA], "no assignee") {
 		t.Error("SLA breach should be flagged")
 	}
 
@@ -381,7 +381,7 @@ func TestStatusForbiddenFallsBackToComment(t *testing.T) {
 	if err := e.Handle(context.Background(), platform.Event{Type: platform.EventCROpened, Repo: testRepo, Number: 1, CodeChanged: true}); err != nil {
 		t.Fatalf("403 on statuses must not fail the job: %v", err)
 	}
-	if !strings.Contains(c.comments["change_request#1|"+markerSummary], "| `pr-rules` | ❌ failure") {
+	if !strings.Contains(c.comments["change_request#1|"+markerSummary], "| Conventions | **Failed** |") {
 		t.Error("results must still be posted in the summary comment")
 	}
 }

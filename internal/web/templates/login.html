@@ -1,15 +1,20 @@
+{{define "title"}}Sign In · repoguard{{end}}
 {{define "content"}}
-<div style="max-width:380px;margin:60px auto">
-  <div class="card">
-    <h1>🛡️ repoguard</h1>
-    <p class="lead">Sign in to the admin console</p>
-    {{if .Error}}<div class="flash err">{{.Error}}</div>{{end}}
+<div class="auth">
+  <div class="auth-card">
+    <div class="brand">repoguard</div>
+    <h1>Sign in to the admin console</h1>
+    <p class="lead">Checks for every merge request, in one place.</p>
+    {{if .Error}}<div class="note danger flash" role="alert">{{.Error}}</div>{{end}}
     <form method="post" action="/login">
-      <label for="pw">Password</label>
-      <input id="pw" type="password" name="password" autofocus required>
-      <div class="hint">The password is printed in the startup log (the <code>admin password</code> line), or is the value of <code>REPOGUARD_ADMIN_PASSWORD</code> if you set one.</div>
-      <p><button type="submit">Sign in</button></p>
+      <div class="field">
+        <label for="pw">Password</label>
+        <input id="pw" type="password" name="password" autofocus required>
+        <span class="help">Printed in the startup log on the <code>admin password</code> line, unless <code>REPOGUARD_ADMIN_PASSWORD</code> is set.</span>
+      </div>
+      <button class="btn primary" type="submit">Sign In</button>
     </form>
+    <p class="foot-note">repoguard {{.Version}}</p>
   </div>
 </div>
 {{end}}
